@@ -423,7 +423,7 @@ protected:
     I &n;
 
 public:
-    CVarInt(I &nIn) : n(nIn) {}
+    explicit CVarInt(I &nIn) : n(nIn) {}
 
     template <typename Stream> void Serialize(Stream &s) const {
         WriteVarInt<Stream, I>(s, n);
@@ -439,7 +439,7 @@ protected:
     uint64_t &n;
 
 public:
-    CCompactSize(uint64_t &nIn) : n(nIn) {}
+    explicit CCompactSize(uint64_t &nIn) : n(nIn) {}
 
     template <typename Stream> void Serialize(Stream &s) const {
         WriteCompactSize<Stream>(s, n);
@@ -455,7 +455,7 @@ protected:
     std::string &string;
 
 public:
-    LimitedString(std::string &_string) : string(_string) {}
+    explicit LimitedString(std::string &_string) : string(_string) {}
 
     template <typename Stream> void Unserialize(Stream &s) {
         size_t size = ReadCompactSize(s);
