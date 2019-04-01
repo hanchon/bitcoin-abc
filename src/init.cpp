@@ -2062,20 +2062,10 @@ bool AppInitMain(Config &config,
             try {
                 UnloadBlockIndex();
 
-                // delete pcoinsTip;
                 pcoinsTip.reset();
-                // delete pcoinsdbview;
-                pcoinsdbview.reset(new CCoinsViewDB(nCoinDBCache, false, fReindex || fReindexChainState));
-                // delete pcoinscatcher;
-                pcoinscatcher.reset(new CCoinsViewErrorCatcher(pcoinsdbview.get()));
-                // delete pblocktree;
+                pcoinsdbview.reset();
+                pcoinscatcher.reset();
                 pblocktree.reset(new CBlockTreeDB(nBlockTreeDBCache, false, fReindex, dbCompression, dbMaxOpenFiles));
-
-                // pblocktree =
-                //     new CBlockTreeDB(nBlockTreeDBCache, false, fReindex, dbCompression, dbMaxOpenFiles);
-                // pcoinsdbview = new CCoinsViewDB(nCoinDBCache, false,
-                //                                 fReindex || fReindexChainState);
-                // pcoinscatcher = new CCoinsViewErrorCatcher(pcoinsdbview);
 
                 if (fReindex) {
                     pblocktree->WriteReindexing(true);
