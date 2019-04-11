@@ -20,16 +20,16 @@ class SpentIndexTest(BitcoinTestFramework):
     def set_test_params(self):
         self.num_nodes = 4
         self.setup_clean_chain = True    
-        self.extra_args = [["-debug"],["-debug", "-spentindex"],["-debug", "-spentindex"], ["-debug", "-spentindex", "-txindex"]]
+        self.extra_args = [["-debug", "-deprecatedrpc=signrawtransaction"],["-debug", "-spentindex", "-deprecatedrpc=signrawtransaction"],["-debug", "-spentindex", "-deprecatedrpc=signrawtransaction"], ["-debug", "-spentindex", "-txindex", "-deprecatedrpc=signrawtransaction"]]
 
     def setup_network(self):
         self.setup_nodes()
 
         # Nodes 0/1 are "wallet" nodes
         # Nodes 2/3 are used for testing
-        connect_nodes(self.nodes[0], 1)
-        connect_nodes(self.nodes[0], 2)
-        connect_nodes(self.nodes[0], 3)
+        connect_nodes(self.nodes[0], self.nodes[1])
+        connect_nodes(self.nodes[0], self.nodes[2])
+        connect_nodes(self.nodes[0], self.nodes[3])
 
         self.is_network_split = False
         self.sync_all()
