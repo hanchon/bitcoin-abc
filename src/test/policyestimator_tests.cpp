@@ -1,14 +1,16 @@
-// Copyright (c) 2011-2016 The Bitcoin Core developers
+// Copyright (c) 2011-2019 The Bitcoin Core developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#include "policy/fees.h"
-#include "policy/policy.h"
-#include "txmempool.h"
-#include "uint256.h"
-#include "util.h"
+#include <policy/fees.h>
+#include <policy/policy.h>
 
-#include "test/test_bitcoin.h"
+#include <txmempool.h>
+#include <uint256.h>
+#include <util/system.h>
+#include <util/time.h>
+
+#include <test/setup_common.h>
 
 #include <boost/test/unit_test.hpp>
 
@@ -16,6 +18,7 @@ BOOST_FIXTURE_TEST_SUITE(policyestimator_tests, BasicTestingSetup)
 
 BOOST_AUTO_TEST_CASE(MempoolMinimumFeeEstimate) {
     CTxMemPool mpool;
+    LOCK2(cs_main, mpool.cs);
     TestMemPoolEntryHelper entry;
 
     // Create a transaction template
@@ -42,11 +45,10 @@ BOOST_AUTO_TEST_CASE(MempoolMinimumFeeEstimate) {
             tx.vin[0].nSequence = 10000 * blocknum + j;
             TxId txid = tx.GetId();
             mpool.addUnchecked(
-                txid, entry.Fee((j + 1) * DEFAULT_BLOCK_MIN_TX_FEE_PER_KB)
-                          .Time(GetTime())
-                          .Priority(0)
-                          .Height(blocknum)
-                          .FromTx(tx, &mpool));
+                entry.Fee((j + 1) * DEFAULT_BLOCK_MIN_TX_FEE_PER_KB)
+                    .Time(GetTime())
+                    .Height(blocknum)
+                    .FromTx(tx));
             CTransactionRef ptx = mpool.get(txid);
             block.push_back(ptx);
         }
@@ -54,9 +56,8 @@ BOOST_AUTO_TEST_CASE(MempoolMinimumFeeEstimate) {
         block.clear();
     }
 
-    // Check that the estimate is above the rolling minimum fee.  This should
-    // be true since we have not trimmed the mempool.
-    BOOST_CHECK(CFeeRate(Amount::zero()) == mpool.estimateFee());
+    // Check that the estimate is above the rolling minimum fee. This should be
+    // true since we have not trimmed the mempool.
     BOOST_CHECK(mpool.GetMinFee(1) <= mpool.estimateFee());
 
     // Check that estimateFee returns the minimum rolling fee even when the
@@ -78,12 +79,10 @@ BOOST_AUTO_TEST_CASE(MempoolMinimumFeeEstimate) {
         // Add new transaction to the mempool with a increasing fee
         // The average should end up as 1/2 * 100 *
         // DEFAULT_BLOCK_MIN_TX_FEE_PER_KB
-        mpool.addUnchecked(tx.GetId(),
-                           entry.Fee((i + 1) * DEFAULT_BLOCK_MIN_TX_FEE_PER_KB)
+        mpool.addUnchecked(entry.Fee((i + 1) * DEFAULT_BLOCK_MIN_TX_FEE_PER_KB)
                                .Time(GetTime())
-                               .Priority(0)
                                .Height(blocknum)
-                               .FromTx(tx, &mpool));
+                               .FromTx(tx));
     }
 
     // Trim to size.  GetMinFee should be more than 10000 *

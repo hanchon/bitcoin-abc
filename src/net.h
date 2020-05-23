@@ -1,27 +1,29 @@
 // Copyright (c) 2009-2010 Satoshi Nakamoto
 // Copyright (c) 2009-2016 The Bitcoin Core developers
-// Copyright (c) 2017 The Bitcoin developers
+// Copyright (c) 2017-2019 The Bitcoin developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 #ifndef BITCOIN_NET_H
 #define BITCOIN_NET_H
 
-#include "addrdb.h"
-#include "addrman.h"
-#include "amount.h"
-#include "bloom.h"
-#include "chainparams.h"
-#include "compat.h"
-#include "hash.h"
-#include "limitedmap.h"
-#include "netaddress.h"
-#include "protocol.h"
-#include "random.h"
-#include "streams.h"
-#include "sync.h"
-#include "threadinterrupt.h"
-#include "uint256.h"
+#include <addrdb.h>
+#include <addrman.h>
+#include <amount.h>
+#include <bloom.h>
+#include <chainparams.h>
+#include <compat.h>
+#include <crypto/siphash.h>
+#include <hash.h>
+#include <limitedmap.h>
+#include <net_permissions.h>
+#include <netaddress.h>
+#include <protocol.h>
+#include <random.h>
+#include <streams.h>
+#include <sync.h>
+#include <threadinterrupt.h>
+#include <uint256.h>
 
 #include <atomic>
 #include <condition_variable>
@@ -34,9 +36,15 @@
 #include <arpa/inet.h>
 #endif
 
+class BanMan;
 class Config;
 class CNode;
 class CScheduler;
+
+/** Default for -whitelistrelay. */
+static const bool DEFAULT_WHITELISTRELAY = true;
+/** Default for -whitelistforcerelay. */
+static const bool DEFAULT_WHITELISTFORCERELAY = false;
 
 /**
  * Time between pings automatically sent out for latency probing and keepalive
@@ -55,7 +63,8 @@ static const unsigned int MAX_INV_SZ = 50000;
 static_assert(MAX_PROTOCOL_MESSAGE_LENGTH > MAX_INV_SZ * sizeof(CInv),
               "Max protocol message length must be greater than largest "
               "possible INV message");
-
+/** The maximum number of entries in a locator */
+static const unsigned int MAX_LOCATOR_SZ = 101;
 /** The maximum number of new addresses to accumulate before announcing. */
 static const unsigned int MAX_ADDR_TO_SEND = 1000;
 /** Maximum length of strSubVer in `version` message */
@@ -72,10 +81,6 @@ static const bool DEFAULT_UPNP = USE_UPNP;
 #else
 static const bool DEFAULT_UPNP = false;
 #endif
-/** The maximum number of entries in mapAskFor */
-static const size_t MAPASKFOR_MAX_SZ = MAX_INV_SZ;
-/** The maximum number of entries in setAskFor (larger due to getdata latency)*/
-static const size_t SETASKFOR_MAX_SZ = 2 * MAX_INV_SZ;
 /** The maximum number of peer connections to maintain. */
 static const unsigned int DEFAULT_MAX_PEER_CONNECTIONS = 125;
 /** The default for -maxuploadtarget. 0 = Unlimited */
@@ -84,14 +89,12 @@ static const uint64_t DEFAULT_MAX_UPLOAD_TARGET = 0;
 static const uint64_t MAX_UPLOAD_TIMEFRAME = 60 * 60 * 24;
 /** Default for blocks only*/
 static const bool DEFAULT_BLOCKSONLY = false;
+/** -peertimeout default */
+static const int64_t DEFAULT_PEER_CONNECT_TIMEOUT = 60;
 
 static const bool DEFAULT_FORCEDNSSEED = false;
 static const size_t DEFAULT_MAXRECEIVEBUFFER = 5 * 1000;
 static const size_t DEFAULT_MAXSENDBUFFER = 1 * 1000;
-
-// Default 24-hour ban.
-// NOTE: When adjusting this, update rpcnet:setban's help ("24h")
-static const unsigned int DEFAULT_MISBEHAVING_BANTIME = 60 * 60 * 24;
 
 typedef int64_t NodeId;
 
@@ -136,13 +139,16 @@ public:
         int nBestHeight = 0;
         CClientUIInterface *uiInterface = nullptr;
         NetEventsInterface *m_msgproc = nullptr;
+        BanMan *m_banman = nullptr;
         unsigned int nSendBufferMaxSize = 0;
         unsigned int nReceiveFloodSize = 0;
         uint64_t nMaxOutboundTimeframe = 0;
         uint64_t nMaxOutboundLimit = 0;
+        int64_t m_peer_connect_timeout = DEFAULT_PEER_CONNECT_TIMEOUT;
         std::vector<std::string> vSeedNodes;
-        std::vector<CSubNet> vWhitelistedRange;
-        std::vector<CService> vBinds, vWhiteBinds;
+        std::vector<NetWhitelistPermissions> vWhitelistedRange;
+        std::vector<NetWhitebindPermissions> vWhiteBinds;
+        std::vector<CService> vBinds;
         bool m_use_addrman_outgoing = true;
         std::vector<std::string> m_specified_outgoing;
         std::vector<std::string> m_added_nodes;
@@ -157,20 +163,42 @@ public:
         nMaxFeeler = connOptions.nMaxFeeler;
         nBestHeight = connOptions.nBestHeight;
         clientInterface = connOptions.uiInterface;
+        m_banman = connOptions.m_banman;
         m_msgproc = connOptions.m_msgproc;
         nSendBufferMaxSize = connOptions.nSendBufferMaxSize;
         nReceiveFloodSize = connOptions.nReceiveFloodSize;
-        nMaxOutboundTimeframe = connOptions.nMaxOutboundTimeframe;
-        nMaxOutboundLimit = connOptions.nMaxOutboundLimit;
+        m_peer_connect_timeout = connOptions.m_peer_connect_timeout;
+        {
+            LOCK(cs_totalBytesSent);
+            nMaxOutboundTimeframe = connOptions.nMaxOutboundTimeframe;
+            nMaxOutboundLimit = connOptions.nMaxOutboundLimit;
+        }
         vWhitelistedRange = connOptions.vWhitelistedRange;
-        vAddedNodes = connOptions.m_added_nodes;
+        {
+            LOCK(cs_vAddedNodes);
+            vAddedNodes = connOptions.m_added_nodes;
+        }
     }
 
     CConnman(const Config &configIn, uint64_t seed0, uint64_t seed1);
     ~CConnman();
 
     bool Start(CScheduler &scheduler, const Options &options);
-    void Stop();
+
+    // TODO: Remove NO_THREAD_SAFETY_ANALYSIS. Lock cs_vNodes before reading the
+    // variable vNodes.
+    //
+    // When removing NO_THREAD_SAFETY_ANALYSIS be aware of the following lock
+    // order requirements:
+    // * CheckForStaleTipAndEvictPeers locks cs_main before indirectly calling
+    //   GetExtraOutboundCount which locks cs_vNodes.
+    // * ProcessMessage locks cs_main and g_cs_orphans before indirectly calling
+    //   ForEachNode which locks cs_vNodes.
+    //
+    // Thus the implicit locking order requirement is: (1) cs_main, (2)
+    // g_cs_orphans, (3) cs_vNodes.
+    void Stop() NO_THREAD_SAFETY_ANALYSIS;
+
     void Interrupt();
     bool GetNetworkActive() const { return fNetworkActive; };
     void SetNetworkActive(bool active);
@@ -233,28 +261,6 @@ public:
                          const CAddress &addrFrom, int64_t nTimePenalty = 0);
     std::vector<CAddress> GetAddresses();
 
-    // Denial-of-service detection/prevention. The idea is to detect peers that
-    // are behaving badly and disconnect/ban them, but do it in a
-    // one-coding-mistake-won't-shatter-the-entire-network way.
-    // IMPORTANT: There should be nothing I can give a node that it will forward
-    // on that will make that node's peers drop it. If there is, an attacker can
-    // isolate a node and/or try to split the network. Dropping a node for
-    // sending stuff that is invalid now but might be valid in a later version
-    // is also dangerous, because it can cause a network split between nodes
-    // running old code and nodes running new code.
-    void Ban(const CNetAddr &netAddr, const BanReason &reason,
-             int64_t bantimeoffset = 0, bool sinceUnixEpoch = false);
-    void Ban(const CSubNet &subNet, const BanReason &reason,
-             int64_t bantimeoffset = 0, bool sinceUnixEpoch = false);
-    // Needed for unit testing.
-    void ClearBanned();
-    bool IsBanned(CNetAddr ip);
-    bool IsBanned(CSubNet subnet);
-    bool Unban(const CNetAddr &ip);
-    bool Unban(const CSubNet &ip);
-    void GetBanned(banmap_t &banmap);
-    void SetBanned(const banmap_t &banmap);
-
     // This allows temporarily exceeding nMaxOutbound, with the goal of finding
     // a peer that is better than all our current peers.
     void SetTryNewOutboundPeer(bool flag);
@@ -275,6 +281,8 @@ public:
     size_t GetNodeCount(NumConnections num);
     void GetNodeStats(std::vector<CNodeStats> &vstats);
     bool DisconnectNode(const std::string &node);
+    bool DisconnectNode(const CSubNet &subnet);
+    bool DisconnectNode(const CNetAddr &addr);
     bool DisconnectNode(NodeId id);
 
     ServiceFlags GetLocalServices() const;
@@ -314,26 +322,43 @@ public:
 
     void WakeMessageHandler();
 
+    /**
+     * Attempts to obfuscate tx time through exponentially distributed emitting.
+     * Works assuming that a single interval is used.
+     * Variable intervals will result in privacy decrease.
+     */
+    int64_t PoissonNextSendInbound(int64_t now, int average_interval_seconds);
+
 private:
     struct ListenSocket {
+    public:
         SOCKET socket;
-        bool whitelisted;
+        inline void AddSocketPermissionFlags(NetPermissionFlags &flags) const {
+            NetPermissions::AddFlag(flags, m_permissions);
+        }
+        ListenSocket(SOCKET socket_, NetPermissionFlags permissions_)
+            : socket(socket_), m_permissions(permissions_) {}
 
-        ListenSocket(SOCKET socket_, bool whitelisted_)
-            : socket(socket_), whitelisted(whitelisted_) {}
+    private:
+        NetPermissionFlags m_permissions;
     };
 
     bool BindListenPort(const CService &bindAddr, std::string &strError,
-                        bool fWhitelisted = false);
-    bool Bind(const CService &addr, unsigned int flags);
+                        NetPermissionFlags permissions);
+    bool Bind(const CService &addr, unsigned int flags,
+              NetPermissionFlags permissions);
     bool InitBinds(const std::vector<CService> &binds,
-                   const std::vector<CService> &whiteBinds);
+                   const std::vector<NetWhitebindPermissions> &whiteBinds);
     void ThreadOpenAddedConnections();
     void AddOneShot(const std::string &strDest);
     void ProcessOneShot();
     void ThreadOpenConnections(std::vector<std::string> connect);
     void ThreadMessageHandler();
     void AcceptConnection(const ListenSocket &hListenSocket);
+    void DisconnectNodes();
+    void NotifyNumConnectionsChanged();
+    void InactivityCheck(CNode *pnode);
+    void SocketHandler();
     void ThreadSocketHandler();
     void ThreadDNSAddressSeed();
 
@@ -346,23 +371,16 @@ private:
 
     bool AttemptToEvictConnection();
     CNode *ConnectNode(CAddress addrConnect, const char *pszDest,
-                       bool fCountFailure);
-    bool IsWhitelistedRange(const CNetAddr &addr);
+                       bool fCountFailure, bool manual_connection);
+    void AddWhitelistPermissionFlags(NetPermissionFlags &flags,
+                                     const CNetAddr &addr) const;
 
     void DeleteNode(CNode *pnode);
 
     NodeId GetNewNodeId();
 
     size_t SocketSendData(CNode *pnode) const;
-    //! check is the banlist has unwritten changes
-    bool BannedSetIsDirty();
-    //! set the "dirty" flag for the banlist
-    void SetBannedSetDirty(bool dirty = true);
-    //! clean unused entries (if bantime has expired)
-    void SweepBanned();
     void DumpAddresses();
-    void DumpData();
-    void DumpBanlist();
 
     // Network stats
     void RecordBytesRecv(uint64_t bytes);
@@ -374,39 +392,40 @@ private:
     const Config *config;
 
     // Network usage totals
-    CCriticalSection cs_totalBytesRecv;
-    CCriticalSection cs_totalBytesSent;
-    uint64_t nTotalBytesRecv;
-    uint64_t nTotalBytesSent;
+    RecursiveMutex cs_totalBytesRecv;
+    RecursiveMutex cs_totalBytesSent;
+    uint64_t nTotalBytesRecv GUARDED_BY(cs_totalBytesRecv);
+    uint64_t nTotalBytesSent GUARDED_BY(cs_totalBytesSent);
 
     // outbound limit & stats
-    uint64_t nMaxOutboundTotalBytesSentInCycle;
-    uint64_t nMaxOutboundCycleStartTime;
-    uint64_t nMaxOutboundLimit;
-    uint64_t nMaxOutboundTimeframe;
+    uint64_t nMaxOutboundTotalBytesSentInCycle GUARDED_BY(cs_totalBytesSent);
+    uint64_t nMaxOutboundCycleStartTime GUARDED_BY(cs_totalBytesSent);
+    uint64_t nMaxOutboundLimit GUARDED_BY(cs_totalBytesSent);
+    uint64_t nMaxOutboundTimeframe GUARDED_BY(cs_totalBytesSent);
+
+    // P2P timeout in seconds
+    int64_t m_peer_connect_timeout;
 
     // Whitelisted ranges. Any node connecting from these is automatically
     // whitelisted (as well as those connecting to whitelisted binds).
-    std::vector<CSubNet> vWhitelistedRange;
+    std::vector<NetWhitelistPermissions> vWhitelistedRange;
 
-    unsigned int nSendBufferMaxSize;
-    unsigned int nReceiveFloodSize;
+    unsigned int nSendBufferMaxSize{0};
+    unsigned int nReceiveFloodSize{0};
 
     std::vector<ListenSocket> vhListenSocket;
-    std::atomic<bool> fNetworkActive;
-    banmap_t setBanned;
-    CCriticalSection cs_setBanned;
-    bool setBannedIsDirty;
-    bool fAddressesInitialized;
+    std::atomic<bool> fNetworkActive{true};
+    bool fAddressesInitialized{false};
     CAddrMan addrman;
-    std::deque<std::string> vOneShots;
-    CCriticalSection cs_vOneShots;
-    std::vector<std::string> vAddedNodes;
-    CCriticalSection cs_vAddedNodes;
-    std::vector<CNode *> vNodes;
+    std::deque<std::string> vOneShots GUARDED_BY(cs_vOneShots);
+    RecursiveMutex cs_vOneShots;
+    std::vector<std::string> vAddedNodes GUARDED_BY(cs_vAddedNodes);
+    RecursiveMutex cs_vAddedNodes;
+    std::vector<CNode *> vNodes GUARDED_BY(cs_vNodes);
     std::list<CNode *> vNodesDisconnected;
-    mutable CCriticalSection cs_vNodes;
-    std::atomic<NodeId> nLastNodeId;
+    mutable RecursiveMutex cs_vNodes;
+    std::atomic<NodeId> nLastNodeId{0};
+    unsigned int nPrevNodeCount{0};
 
     /** Services this instance offers */
     ServiceFlags nLocalServices;
@@ -420,6 +439,7 @@ private:
     std::atomic<int> nBestHeight;
     CClientUIInterface *clientInterface;
     NetEventsInterface *m_msgproc;
+    BanMan *m_banman;
 
     /** SipHasher seeds for deterministic randomness */
     const uint64_t nSeed0, nSeed1;
@@ -428,8 +448,8 @@ private:
     bool fMsgProcWake;
 
     std::condition_variable condMsgProc;
-    CWaitableCriticalSection mutexMsgProc;
-    std::atomic<bool> flagInterruptMsgProc;
+    Mutex mutexMsgProc;
+    std::atomic<bool> flagInterruptMsgProc{false};
 
     CThreadInterrupt interruptNet;
 
@@ -446,17 +466,18 @@ private:
      */
     std::atomic_bool m_try_another_outbound_peer;
 
+    std::atomic<int64_t> m_next_send_inv_to_incoming{0};
+
     friend struct CConnmanTest;
 };
 
 extern std::unique_ptr<CConnman> g_connman;
+extern std::unique_ptr<BanMan> g_banman;
 void Discover();
 void StartMapPort();
 void InterruptMapPort();
 void StopMapPort();
 unsigned short GetListenPort();
-bool BindListenPort(const CService &bindAddr, std::string &strError,
-                    bool fWhitelisted = false);
 
 /**
  * Interface for message handling
@@ -497,17 +518,23 @@ enum {
 
 bool IsPeerAddrLocalGood(CNode *pnode);
 void AdvertiseLocal(CNode *pnode);
-void SetLimited(enum Network net, bool fLimited = true);
-bool IsLimited(enum Network net);
-bool IsLimited(const CNetAddr &addr);
+
+/**
+ * Mark a network as reachable or unreachable (no automatic connects to it)
+ * @note Networks are reachable by default
+ */
+void SetReachable(enum Network net, bool reachable);
+/** @returns true if the network is reachable, false otherwise */
+bool IsReachable(enum Network net);
+/** @returns true if the address is in a reachable network, false otherwise */
+bool IsReachable(const CNetAddr &addr);
+
 bool AddLocal(const CService &addr, int nScore = LOCAL_NONE);
 bool AddLocal(const CNetAddr &addr, int nScore = LOCAL_NONE);
 void RemoveLocal(const CService &addr);
 bool SeenLocal(const CService &addr);
 bool IsLocal(const CService &addr);
 bool GetLocal(CService &addr, const CNetAddr *paddrPeer = nullptr);
-bool IsReachable(enum Network net);
-bool IsReachable(const CNetAddr &addr);
 CAddress GetLocalAddress(const CNetAddr *paddrPeer,
                          ServiceFlags nLocalServices);
 
@@ -515,15 +542,14 @@ extern bool fDiscover;
 extern bool fListen;
 extern bool fRelayTxes;
 
-extern limitedmap<uint256, int64_t> mapAlreadyAskedFor;
-
 struct LocalServiceInfo {
     int nScore;
     int nPort;
 };
 
-extern CCriticalSection cs_mapLocalHost;
-extern std::map<CNetAddr, LocalServiceInfo> mapLocalHost;
+extern RecursiveMutex cs_mapLocalHost;
+extern std::map<CNetAddr, LocalServiceInfo>
+    mapLocalHost GUARDED_BY(cs_mapLocalHost);
 
 // Command, total bytes
 typedef std::map<std::string, uint64_t> mapMsgCmdSize;
@@ -551,10 +577,12 @@ struct CNodeStats {
     mapMsgCmdSize mapSendBytesPerMsgCmd;
     uint64_t nRecvBytes;
     mapMsgCmdSize mapRecvBytesPerMsgCmd;
-    bool fWhitelisted;
+    NetPermissionFlags m_permissionFlags;
+    bool m_legacyWhitelisted;
     double dPingTime;
     double dPingWait;
     double dMinPing;
+    Amount minFeeFilter;
     // Our address, as reported by the peer
     std::string addrLocal;
     // Address of this peer
@@ -621,159 +649,164 @@ class CNode {
 
 public:
     // socket
-    std::atomic<ServiceFlags> nServices;
-    SOCKET hSocket;
+    std::atomic<ServiceFlags> nServices{NODE_NONE};
+    SOCKET hSocket GUARDED_BY(cs_hSocket);
     // Total size of all vSendMsg entries.
-    size_t nSendSize;
+    size_t nSendSize{0};
     // Offset inside the first vSendMsg already sent.
-    size_t nSendOffset;
-    uint64_t nSendBytes;
-    std::deque<std::vector<uint8_t>> vSendMsg;
-    CCriticalSection cs_vSend;
-    CCriticalSection cs_hSocket;
-    CCriticalSection cs_vRecv;
+    size_t nSendOffset{0};
+    uint64_t nSendBytes GUARDED_BY(cs_vSend){0};
+    std::deque<std::vector<uint8_t>> vSendMsg GUARDED_BY(cs_vSend);
+    RecursiveMutex cs_vSend;
+    RecursiveMutex cs_hSocket;
+    RecursiveMutex cs_vRecv;
 
-    CCriticalSection cs_vProcessMsg;
-    std::list<CNetMessage> vProcessMsg;
-    size_t nProcessQueueSize;
+    RecursiveMutex cs_vProcessMsg;
+    std::list<CNetMessage> vProcessMsg GUARDED_BY(cs_vProcessMsg);
+    size_t nProcessQueueSize{0};
 
-    CCriticalSection cs_sendProcessing;
+    RecursiveMutex cs_sendProcessing;
 
     std::deque<CInv> vRecvGetData;
-    uint64_t nRecvBytes;
-    std::atomic<int> nRecvVersion;
+    uint64_t nRecvBytes GUARDED_BY(cs_vRecv){0};
+    std::atomic<int> nRecvVersion{INIT_PROTO_VERSION};
 
-    std::atomic<int64_t> nLastSend;
-    std::atomic<int64_t> nLastRecv;
+    std::atomic<int64_t> nLastSend{0};
+    std::atomic<int64_t> nLastRecv{0};
     const int64_t nTimeConnected;
-    std::atomic<int64_t> nTimeOffset;
+    std::atomic<int64_t> nTimeOffset{0};
     // Address of this peer
     const CAddress addr;
     // Bind address of our side of the connection
     const CAddress addrBind;
-    std::atomic<int> nVersion;
+    std::atomic<int> nVersion{0};
     // strSubVer is whatever byte array we read from the wire. However, this
     // field is intended to be printed out, displayed to humans in various forms
     // and so on. So we sanitize it and store the sanitized version in
     // cleanSubVer. The original should be used when dealing with the network or
     // wire types and the cleaned string used when displayed or logged.
-    std::string strSubVer, cleanSubVer;
+    std::string strSubVer GUARDED_BY(cs_SubVer), cleanSubVer
+        GUARDED_BY(cs_SubVer);
     // Used for both cleanSubVer and strSubVer.
-    CCriticalSection cs_SubVer;
-    // This peer can bypass DoS banning.
-    bool fWhitelisted;
+    RecursiveMutex cs_SubVer;
+    // This peer is preferred for eviction.
+    bool m_prefer_evict{false};
+    bool HasPermission(NetPermissionFlags permission) const {
+        return NetPermissions::HasFlag(m_permissionFlags, permission);
+    }
+    // This boolean is unusued in actual processing, only present for backward
+    // compatibility at RPC/QT level
+    bool m_legacyWhitelisted{false};
     // If true this node is being used as a short lived feeler.
-    bool fFeeler;
-    bool fOneShot;
-    bool m_manual_connection;
-    bool fClient;
-    // after BIP159
-    bool m_limited_node;
+    bool fFeeler{false};
+    bool fOneShot{false};
+    bool m_manual_connection{false};
+    // set by version message
+    bool fClient{false};
+    // after BIP159, set by version message
+    bool m_limited_node{false};
     const bool fInbound;
-    std::atomic_bool fSuccessfullyConnected;
-    std::atomic_bool fDisconnect;
+    std::atomic_bool fSuccessfullyConnected{false};
+    std::atomic_bool fDisconnect{false};
     // We use fRelayTxes for two purposes -
     // a) it allows us to not relay tx invs before receiving the peer's version
     // message.
     // b) the peer may tell us in its version message that we should not relay
     // tx invs unless it loads a bloom filter.
-
-    // protected by cs_filter
-    bool fRelayTxes;
-    bool fSentAddr;
+    bool fRelayTxes GUARDED_BY(cs_filter){false};
+    bool fSentAddr{false};
     CSemaphoreGrant grantOutbound;
-    CCriticalSection cs_filter;
-    std::unique_ptr<CBloomFilter> pfilter;
-    std::atomic<int> nRefCount;
+    mutable RecursiveMutex cs_filter;
+    std::unique_ptr<CBloomFilter> pfilter PT_GUARDED_BY(cs_filter);
+    std::atomic<int> nRefCount{0};
 
     const uint64_t nKeyedNetGroup;
-    std::atomic_bool fPauseRecv;
-    std::atomic_bool fPauseSend;
+    std::atomic_bool fPauseRecv{false};
+    std::atomic_bool fPauseSend{false};
 
 protected:
     mapMsgCmdSize mapSendBytesPerMsgCmd;
-    mapMsgCmdSize mapRecvBytesPerMsgCmd;
+    mapMsgCmdSize mapRecvBytesPerMsgCmd GUARDED_BY(cs_vRecv);
 
 public:
-    uint256 hashContinue;
-    std::atomic<int> nStartingHeight;
+    BlockHash hashContinue;
+    std::atomic<int> nStartingHeight{-1};
 
     // flood relay
     std::vector<CAddress> vAddrToSend;
     CRollingBloomFilter addrKnown;
-    bool fGetAddr;
+    bool fGetAddr{false};
     std::set<uint256> setKnown;
-    int64_t nNextAddrSend;
-    int64_t nNextLocalAddrSend;
+    int64_t nNextAddrSend GUARDED_BY(cs_sendProcessing){0};
+    int64_t nNextLocalAddrSend GUARDED_BY(cs_sendProcessing){0};
 
     // Inventory based relay.
-    CRollingBloomFilter filterInventoryKnown;
+    CRollingBloomFilter filterInventoryKnown GUARDED_BY(cs_inventory);
     // Set of transaction ids we still have to announce. They are sorted by the
     // mempool before relay, so the order is not important.
-    std::set<uint256> setInventoryTxToSend;
+    std::set<TxId> setInventoryTxToSend;
     // List of block ids we still have announce. There is no final sorting
     // before sending, as they are always sent immediately and in the order
     // requested.
-    std::vector<uint256> vInventoryBlockToSend;
-    CCriticalSection cs_inventory;
-    std::set<uint256> setAskFor;
-    std::multimap<int64_t, CInv> mapAskFor;
-    int64_t nNextInvSend;
-    // Used for headers announcements - unfiltered blocks to relay. Also
-    // protected by cs_inventory.
-    std::vector<uint256> vBlockHashesToAnnounce;
-    // Used for BIP35 mempool sending, also protected by cs_inventory.
-    bool fSendMempool;
+    std::vector<uint256> vInventoryBlockToSend GUARDED_BY(cs_inventory);
+    RecursiveMutex cs_inventory;
+    int64_t nNextInvSend{0};
+    // Used for headers announcements - unfiltered blocks to relay.
+    std::vector<BlockHash> vBlockHashesToAnnounce GUARDED_BY(cs_inventory);
+    // Used for BIP35 mempool sending.
+    bool fSendMempool GUARDED_BY(cs_inventory){false};
 
     // Last time a "MEMPOOL" request was serviced.
-    std::atomic<int64_t> timeLastMempoolReq;
+    std::atomic<int64_t> timeLastMempoolReq{0};
 
     // Block and TXN accept times
-    std::atomic<int64_t> nLastBlockTime;
-    std::atomic<int64_t> nLastTXTime;
+    std::atomic<int64_t> nLastBlockTime{0};
+    std::atomic<int64_t> nLastTXTime{0};
 
     // Ping time measurement:
     // The pong reply we're expecting, or 0 if no pong expected.
-    std::atomic<uint64_t> nPingNonceSent;
+    std::atomic<uint64_t> nPingNonceSent{0};
     // Time (in usec) the last ping was sent, or 0 if no ping was ever sent.
-    std::atomic<int64_t> nPingUsecStart;
+    std::atomic<int64_t> nPingUsecStart{0};
     // Last measured round-trip time.
-    std::atomic<int64_t> nPingUsecTime;
+    std::atomic<int64_t> nPingUsecTime{0};
     // Best measured round-trip time.
-    std::atomic<int64_t> nMinPingUsecTime;
+    std::atomic<int64_t> nMinPingUsecTime{std::numeric_limits<int64_t>::max()};
     // Whether a ping is requested.
-    std::atomic<bool> fPingQueued;
+    std::atomic<bool> fPingQueued{false};
     // Minimum fee rate with which to filter inv's to this node
-    Amount minFeeFilter;
-    CCriticalSection cs_feeFilter;
-    Amount lastSentFeeFilter;
-    int64_t nextSendTimeFeeFilter;
+    Amount minFeeFilter GUARDED_BY(cs_feeFilter){Amount::zero()};
+    RecursiveMutex cs_feeFilter;
+    Amount lastSentFeeFilter{Amount::zero()};
+    int64_t nextSendTimeFeeFilter{0};
+
+    std::set<TxId> orphan_work_set;
 
     CNode(NodeId id, ServiceFlags nLocalServicesIn, int nMyStartingHeightIn,
           SOCKET hSocketIn, const CAddress &addrIn, uint64_t nKeyedNetGroupIn,
           uint64_t nLocalHostNonceIn, const CAddress &addrBindIn,
           const std::string &addrNameIn = "", bool fInboundIn = false);
     ~CNode();
+    CNode(const CNode &) = delete;
+    CNode &operator=(const CNode &) = delete;
 
 private:
-    CNode(const CNode &);
-    void operator=(const CNode &);
     const NodeId id;
-
     const uint64_t nLocalHostNonce;
     // Services offered to this peer
     const ServiceFlags nLocalServices;
     const int nMyStartingHeight;
-    int nSendVersion;
-    // Used only by SocketHandler thread.
+    int nSendVersion{0};
+    NetPermissionFlags m_permissionFlags{PF_NONE};
+    // Used only by SocketHandler thread
     std::list<CNetMessage> vRecvMsg;
 
-    mutable CCriticalSection cs_addrName;
-    std::string addrName;
+    mutable RecursiveMutex cs_addrName;
+    std::string addrName GUARDED_BY(cs_addrName);
 
     // Our address, as reported by the peer
-    CService addrLocal;
-    mutable CCriticalSection cs_addrLocal;
+    CService addrLocal GUARDED_BY(cs_addrLocal);
+    mutable RecursiveMutex cs_addrLocal;
 
 public:
     NodeId GetId() const { return id; }
@@ -832,20 +865,19 @@ public:
     void PushInventory(const CInv &inv) {
         LOCK(cs_inventory);
         if (inv.type == MSG_TX) {
-            if (!filterInventoryKnown.contains(inv.hash)) {
-                setInventoryTxToSend.insert(inv.hash);
+            const TxId txid(inv.hash);
+            if (!filterInventoryKnown.contains(txid)) {
+                setInventoryTxToSend.insert(txid);
             }
         } else if (inv.type == MSG_BLOCK) {
             vInventoryBlockToSend.push_back(inv.hash);
         }
     }
 
-    void PushBlockHash(const uint256 &hash) {
+    void PushBlockHash(const BlockHash &hash) {
         LOCK(cs_inventory);
         vBlockHashesToAnnounce.push_back(hash);
     }
-
-    void AskFor(const CInv &inv);
 
     void CloseSocketDisconnect();
 
@@ -862,7 +894,7 @@ public:
  * Return a timestamp in the future (in microseconds) for exponentially
  * distributed events.
  */
-int64_t PoissonNextSend(int64_t nNow, int average_interval_seconds);
+int64_t PoissonNextSend(int64_t now, int average_interval_seconds);
 
 std::string getSubVersionEB(uint64_t MaxBlockSize);
 std::string userAgent(const Config &config);

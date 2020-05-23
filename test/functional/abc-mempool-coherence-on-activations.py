@@ -22,11 +22,10 @@ We test the mempool coherence in 3 cases:
 from test_framework.blocktools import (
     create_block,
     create_coinbase,
-    create_transaction,
+    create_tx_with_script,
     make_conform_to_ctor,
 )
-from test_framework.comptool import TestInstance, TestManager
-from test_framework.key import CECKey
+from test_framework.key import ECKey
 from test_framework.messages import (
     COIN,
     COutPoint,
@@ -35,7 +34,7 @@ from test_framework.messages import (
     CTxOut,
     ToHex,
 )
-from test_framework.mininode import network_thread_start
+from test_framework.mininode import P2PDataStore
 from test_framework.script import (
     CScript,
     OP_CHECKSIG,
@@ -44,7 +43,7 @@ from test_framework.script import (
     SIGHASH_FORKID,
     SignatureHashForkId,
 )
-from test_framework.test_framework import ComparisonTestFramework
+from test_framework.test_framework import BitcoinTestFramework
 from test_framework.util import assert_equal, assert_raises_rpc_error
 
 
@@ -59,9 +58,7 @@ EXTRA_ARG = "-replayprotectionactivationtime={}".format(ACTIVATION_TIME)
 FIRST_BLOCK_TIME = ACTIVATION_TIME - 86400
 
 # Expected RPC error when trying to send an activation specific spend txn.
-EXPECTED_ERROR = b'mandatory-script-verify-flag-failed (Signature must be zero for failed CHECK(MULTI)SIG operation)'
-RPC_EXPECTED_ERROR = "16: " + \
-    EXPECTED_ERROR.decode("utf-8")
+RPC_EXPECTED_ERROR = "mandatory-script-verify-flag-failed (Signature must be zero for failed CHECK(MULTI)SIG operation) (code 16)"
 
 
 def create_fund_and_activation_specific_spending_tx(spend, pre_fork_only):
@@ -75,13 +72,13 @@ def create_fund_and_activation_specific_spending_tx(spend, pre_fork_only):
     # create transactions that are only valid before or after the fork.
 
     # Generate a key pair to test
-    private_key = CECKey()
-    private_key.set_secretbytes(b"replayprotection")
-    public_key = private_key.get_pubkey()
+    private_key = ECKey()
+    private_key.generate()
+    public_key = private_key.get_pubkey().get_bytes()
 
     # Fund transaction
     script = CScript([public_key, OP_CHECKSIG])
-    txfund = create_transaction(
+    txfund = create_tx_with_script(
         spend.tx, spend.n, b'', 50 * COIN, script)
     txfund.rehash()
 
@@ -97,7 +94,7 @@ def create_fund_and_activation_specific_spending_tx(spend, pre_fork_only):
     sighashtype = (forkvalue << 8) | SIGHASH_ALL | SIGHASH_FORKID
     sighash = SignatureHashForkId(
         script, txspend, 0, sighashtype, 50 * COIN)
-    sig = private_key.sign(sighash) + \
+    sig = private_key.sign_ecdsa(sighash) + \
         bytes(bytearray([SIGHASH_ALL | SIGHASH_FORKID]))
     txspend.vin[0].scriptSig = CScript([sig])
     txspend.rehash()
@@ -106,11 +103,13 @@ def create_fund_and_activation_specific_spending_tx(spend, pre_fork_only):
 
 
 def create_fund_and_pre_fork_only_tx(spend):
-    return create_fund_and_activation_specific_spending_tx(spend, pre_fork_only=True)
+    return create_fund_and_activation_specific_spending_tx(
+        spend, pre_fork_only=True)
 
 
 def create_fund_and_post_fork_only_tx(spend):
-    return create_fund_and_activation_specific_spending_tx(spend, pre_fork_only=False)
+    return create_fund_and_activation_specific_spending_tx(
+        spend, pre_fork_only=False)
 
 
 # ---Mempool coherence on activations test---
@@ -123,7 +122,7 @@ class PreviousSpendableOutput(object):
         self.n = n
 
 
-class MempoolCoherenceOnActivationsTest(ComparisonTestFramework):
+class MempoolCoherenceOnActivationsTest(BitcoinTestFramework):
 
     def set_test_params(self):
         self.num_nodes = 1
@@ -132,17 +131,11 @@ class MempoolCoherenceOnActivationsTest(ComparisonTestFramework):
         self.tip = None
         self.blocks = {}
         self.extra_args = [['-whitelist=127.0.0.1',
-                            EXTRA_ARG]]
-
-    def run_test(self):
-        self.test = TestManager(self, self.options.tmpdir)
-        self.test.add_all_connections(self.nodes)
-        network_thread_start()
-        self.nodes[0].setmocktime(ACTIVATION_TIME)
-        self.test.run()
+                            EXTRA_ARG,
+                            '-acceptnonstdtxn=1']]
 
     def next_block(self, number):
-        if self.tip == None:
+        if self.tip is None:
             base_block_hash = self.genesis_hash
             block_time = FIRST_BLOCK_TIME
         else:
@@ -162,8 +155,12 @@ class MempoolCoherenceOnActivationsTest(ComparisonTestFramework):
         self.blocks[number] = block
         return block
 
-    def get_tests(self):
-        self.genesis_hash = int(self.nodes[0].getbestblockhash(), 16)
+    def run_test(self):
+        node = self.nodes[0]
+        node.add_p2p_connection(P2PDataStore())
+        node.setmocktime(ACTIVATION_TIME)
+
+        self.genesis_hash = int(node.getbestblockhash(), 16)
         self.block_heights[self.genesis_hash] = 0
         spendable_outputs = []
 
@@ -174,17 +171,6 @@ class MempoolCoherenceOnActivationsTest(ComparisonTestFramework):
         # get an output that we previously marked as spendable
         def get_spendable_output():
             return PreviousSpendableOutput(spendable_outputs.pop(0).vtx[0], 0)
-
-        # returns a test case that asserts that the current tip was accepted
-        def accepted():
-            return TestInstance([[self.tip, True]])
-
-        # returns a test case that asserts that the current tip was rejected
-        def rejected(reject=None):
-            if reject is None:
-                return TestInstance([[self.tip, False]])
-            else:
-                return TestInstance([[self.tip, reject]])
 
         # move the tip back to a previous block
         def tip(number):
@@ -210,7 +196,7 @@ class MempoolCoherenceOnActivationsTest(ComparisonTestFramework):
         # send a txn to the mempool and check it was accepted
         def send_transaction_to_mempool(tx):
             tx_id = node.sendrawtransaction(ToHex(tx))
-            assert(tx_id in node.getrawmempool())
+            assert tx_id in node.getrawmempool()
 
         # checks the mempool has exactly the same txns as in the provided list
         def check_mempool_equal(txns):
@@ -220,27 +206,26 @@ class MempoolCoherenceOnActivationsTest(ComparisonTestFramework):
         # scriptPub=OP_TRUE coin into another. Returns the transaction and its
         # spendable output for further chaining.
         def create_always_valid_chained_tx(spend):
-            tx = create_transaction(
+            tx = create_tx_with_script(
                 spend.tx, spend.n, b'', spend.tx.vout[0].nValue - 1000, CScript([OP_TRUE]))
             tx.rehash()
             return tx, PreviousSpendableOutput(tx, 0)
 
         # shorthand
         block = self.next_block
-        node = self.nodes[0]
 
         # Create a new block
         block(0)
         save_spendable_output()
-        yield accepted()
+        node.p2p.send_blocks_and_test([self.tip], node)
 
         # Now we need that block to mature so we can spend the coinbase.
-        test = TestInstance(sync_every_block=False)
+        maturity_blocks = []
         for i in range(110):
             block(5000 + i)
-            test.blocks_and_transactions.append([self.tip, True])
+            maturity_blocks.append(self.tip)
             save_spendable_output()
-        yield test
+        node.p2p.send_blocks_and_test(maturity_blocks, node)
 
         # collect spendable outputs now to avoid cluttering the code later on
         out = []
@@ -261,16 +246,15 @@ class MempoolCoherenceOnActivationsTest(ComparisonTestFramework):
         bfork = block(5555)
         bfork.nTime = ACTIVATION_TIME - 1
         update_block(5555, [txfund0, txfund1, txfund2, txfund3])
-        yield accepted()
+        node.p2p.send_blocks_and_test([self.tip], node)
 
         for i in range(5):
-            block(5200 + i)
-            test.blocks_and_transactions.append([self.tip, True])
-        yield test
+            node.p2p.send_blocks_and_test([block(5200 + i)], node)
 
         # Check we are just before the activation time
-        assert_equal(node.getblockheader(node.getbestblockhash())['mediantime'],
-                     ACTIVATION_TIME - 1)
+        assert_equal(
+            node.getblockchaininfo()['mediantime'],
+            ACTIVATION_TIME - 1)
 
         # We are just before the fork. Pre-fork-only and always-valid chained
         # txns (tx_chain0, tx_chain1) are valid, post-fork-only txns are
@@ -292,7 +276,7 @@ class MempoolCoherenceOnActivationsTest(ComparisonTestFramework):
         # pre-fork-only txn.
         block(5556)
         update_block(5556, [tx_chain0, tx_pre0])
-        yield accepted()
+        node.p2p.send_blocks_and_test([self.tip], node)
         forkblockid = node.getbestblockhash()
 
         # Check we just activated the fork
@@ -317,7 +301,7 @@ class MempoolCoherenceOnActivationsTest(ComparisonTestFramework):
         # Mine the 2nd always-valid chained txn and a post-fork-only txn.
         block(5557)
         update_block(5557, [tx_chain1, tx_post0])
-        yield accepted()
+        node.p2p.send_blocks_and_test([self.tip], node)
         postforkblockid = node.getbestblockhash()
         # The mempool contains the 3rd chained txn and a post-fork-only txn.
         check_mempool_equal([tx_chain2, tx_post1])
@@ -371,16 +355,16 @@ class MempoolCoherenceOnActivationsTest(ComparisonTestFramework):
         # This starts after 5204, so it contains neither the forkblockid nor
         # the postforkblockid from above.
         tip(5204)
-        test = TestInstance(sync_every_block=False)
+        reorg_blocks = []
         for i in range(3):
-            block(5900 + i)
-            test.blocks_and_transactions.append([self.tip, True])
+            reorg_blocks.append(block(5900 + i))
 
         # Perform the reorg
-        yield test
+        node.p2p.send_blocks_and_test(reorg_blocks, node)
         # reorg finishes after the fork
-        assert_equal(node.getblockheader(node.getbestblockhash())['mediantime'],
-                     ACTIVATION_TIME+2)
+        assert_equal(
+            node.getblockchaininfo()['mediantime'],
+            ACTIVATION_TIME + 2)
         # In old mempool: tx_chain2, tx_post1
         # Recovered from blocks: tx_chain0, tx_chain1, tx_post0
         # Lost from blocks: tx_pre0

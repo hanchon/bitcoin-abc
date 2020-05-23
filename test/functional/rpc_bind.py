@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-# Copyright (c) 2014-2016 The Bitcoin Core developers
+# Copyright (c) 2014-2019 The Bitcoin Core developers
 # Distributed under the MIT software license, see the accompanying
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
-
-# Test for -rpcbind, as well as -rpcallowip and -rpcconnect
+"""Test running bitcoind with the -rpcbind and -rpcallowip options."""
 
 from platform import uname
 import socket
@@ -14,7 +13,6 @@ from test_framework.test_framework import BitcoinTestFramework, SkipTest
 from test_framework.util import (
     assert_equal,
     assert_raises_rpc_error,
-    get_datadir_path,
     get_rpc_proxy,
     rpc_port,
     rpc_url,
@@ -24,6 +22,7 @@ from test_framework.util import (
 class RPCBindTest(BitcoinTestFramework):
     def set_test_params(self):
         self.setup_clean_chain = True
+        self.bind_to_localhost_only = False
         self.num_nodes = 1
 
     def setup_network(self):
@@ -59,21 +58,25 @@ class RPCBindTest(BitcoinTestFramework):
         at a non-localhost IP.
         '''
         self.log.info("Allow IP test for {}:{}".format(rpchost, rpcport))
-        base_args = ['-disablewallet', '-nolisten'] + \
-            ['-rpcallowip=' + x for x in allow_ips]
+        node_args = \
+            ['-disablewallet', '-nolisten'] + \
+            ['-rpcallowip=' + x for x in allow_ips] + \
+            ['-rpcbind=' + addr for addr in ['127.0.0.1',
+                                             "{}:{}".format(rpchost,
+                                                            rpcport)]]  # Bind to localhost as well so start_nodes doesn't hang
         self.nodes[0].host = None
-        self.start_nodes([base_args])
+        self.start_nodes([node_args])
         # connect to node through non-loopback interface
-        url = rpc_url(get_datadir_path(self.options.tmpdir, 0),
-                      rpchost, rpcport)
+        url = rpc_url(self.nodes[0].datadir, self.chain, rpchost, rpcport)
         node = get_rpc_proxy(url, 0, coveragedir=self.options.coveragedir)
         node.getnetworkinfo()
         self.stop_nodes()
 
     def run_test(self):
-        # due to OS-specific network stats queries, this test works only on Linux
+        # due to OS-specific network stats queries, this test works only on
+        # Linux
         if not sys.platform.startswith('linux'):
-            raise SkipTest("This test can only be run on linux.")
+            raise SkipTest("This test can only be run on Linux.")
 
         # WSL in currently not supported (refer to
         # https://reviews.bitcoinabc.org/T400 for details).
@@ -106,9 +109,9 @@ class RPCBindTest(BitcoinTestFramework):
         # check default without rpcallowip (IPv4 and IPv6 localhost)
         self.run_bind_test(None, '127.0.0.1', [],
                            [('127.0.0.1', defaultport), ('::1', defaultport)])
-        # check default with rpcallowip (IPv6 any)
+        # check default with rpcallowip (IPv4 and IPv6 localhost)
         self.run_bind_test(['127.0.0.1'], '127.0.0.1', [],
-                           [('::0', defaultport)])
+                           [('127.0.0.1', defaultport), ('::1', defaultport)])
         # check only IPv4 localhost (explicit)
         self.run_bind_test(['127.0.0.1'], '127.0.0.1', ['127.0.0.1'],
                            [('127.0.0.1', defaultport)])

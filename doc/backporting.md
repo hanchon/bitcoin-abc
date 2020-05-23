@@ -50,7 +50,7 @@ Before you begin backporting commits, you will need to add an additional remote 
 For Bitcoin Core, this repository would be added as:
 
 ```
-git remote add core git@github.com:bitcoin/bitcoin.git.
+git remote add core git@github.com:bitcoin/bitcoin.git
 git fetch core
 ```
 
@@ -61,7 +61,7 @@ Once you have identified your commit, or commits on question to backport you hav
 1. Backport each diff individually
 2. Squash the commits together for backporting.
 
-In either case, you will find there are likely merge conflicts. 
+In either case, you will find there are likely merge conflicts.
 
 Backport each diff individually
 -------------------------------

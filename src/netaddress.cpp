@@ -4,13 +4,13 @@
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 #ifdef HAVE_CONFIG_H
-#include "config/bitcoin-config.h"
+#include <config/bitcoin-config.h>
 #endif
 
-#include "hash.h"
-#include "netaddress.h"
-#include "tinyformat.h"
-#include "utilstrencodings.h"
+#include <hash.h>
+#include <netaddress.h>
+#include <tinyformat.h>
+#include <util/strencodings.h>
 
 static const uint8_t pchIPv4[12] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff};
 static const uint8_t pchOnionCat[] = {0xFD, 0x87, 0xD8, 0x7E, 0xEB, 0x43};
@@ -20,7 +20,6 @@ static const uint8_t g_internal_prefix[] = {0xFD, 0x6B, 0x88, 0xC0, 0x87, 0x24};
 
 CNetAddr::CNetAddr() {
     memset(ip, 0, sizeof(ip));
-    scopeId = 0;
 }
 
 void CNetAddr::SetIP(const CNetAddr &ipIn) {
@@ -81,6 +80,17 @@ CNetAddr::CNetAddr(const struct in6_addr &ipv6Addr, const uint32_t scope) {
 
 unsigned int CNetAddr::GetByte(int n) const {
     return ip[15 - n];
+}
+
+bool CNetAddr::IsBindAny() const {
+    const int cmplen = IsIPv4() ? 4 : 16;
+    for (int i = 0; i < cmplen; ++i) {
+        if (GetByte(i)) {
+            return false;
+        }
+    }
+
+    return true;
 }
 
 bool CNetAddr::IsIPv4() const {
@@ -158,18 +168,27 @@ bool CNetAddr::IsRFC4843() const {
             (GetByte(12) & 0xF0) == 0x10);
 }
 
+bool CNetAddr::IsRFC7343() const {
+    return (GetByte(15) == 0x20 && GetByte(14) == 0x01 && GetByte(13) == 0x00 &&
+            (GetByte(12) & 0xF0) == 0x20);
+}
+
 bool CNetAddr::IsTor() const {
     return (memcmp(ip, pchOnionCat, sizeof(pchOnionCat)) == 0);
 }
 
 bool CNetAddr::IsLocal() const {
     // IPv4 loopback
-    if (IsIPv4() && (GetByte(3) == 127 || GetByte(3) == 0)) return true;
+    if (IsIPv4() && (GetByte(3) == 127 || GetByte(3) == 0)) {
+        return true;
+    }
 
     // IPv6 loopback (::1/128)
     static const uint8_t pchLocal[16] = {0, 0, 0, 0, 0, 0, 0, 0,
                                          0, 0, 0, 0, 0, 0, 0, 1};
-    if (memcmp(ip, pchLocal, 16) == 0) return true;
+    if (memcmp(ip, pchLocal, 16) == 0) {
+        return true;
+    }
 
     return false;
 }
@@ -221,7 +240,7 @@ bool CNetAddr::IsRoutable() const {
     return IsValid() &&
            !(IsRFC1918() || IsRFC2544() || IsRFC3927() || IsRFC4862() ||
              IsRFC6598() || IsRFC5737() || (IsRFC4193() && !IsTor()) ||
-             IsRFC4843() || IsLocal() || IsInternal());
+             IsRFC4843() || IsRFC7343() || IsLocal() || IsInternal());
 }
 
 bool CNetAddr::IsInternal() const {
@@ -242,7 +261,7 @@ enum Network CNetAddr::GetNetwork() const {
     }
 
     if (IsTor()) {
-        return NET_TOR;
+        return NET_ONION;
     }
 
     return NET_IPV6;
@@ -301,6 +320,9 @@ bool CNetAddr::GetInAddr(struct in_addr *pipv4Addr) const {
 }
 
 bool CNetAddr::GetIn6Addr(struct in6_addr *pipv6Addr) const {
+    if (!IsIPv6()) {
+        return false;
+    }
     memcpy(pipv6Addr, ip, 16);
     return true;
 }
@@ -345,7 +367,7 @@ std::vector<uint8_t> CNetAddr::GetGroup() const {
         vchRet.push_back(GetByte(2) ^ 0xFF);
         return vchRet;
     } else if (IsTor()) {
-        nClass = NET_TOR;
+        nClass = NET_ONION;
         nStartByte = 6;
         nBits = 4;
     } else if (GetByte(15) == 0x20 && GetByte(14) == 0x01 &&
@@ -431,14 +453,14 @@ int CNetAddr::GetReachabilityFrom(const CNetAddr *paddrPartner) const {
                 case NET_IPV6:
                     return fTunnel ? REACH_IPV6_WEAK : REACH_IPV6_STRONG;
             }
-        case NET_TOR:
+        case NET_ONION:
             switch (ourNet) {
                 default:
                     return REACH_DEFAULT;
                 // Tor users can connect to IPv4 as well
                 case NET_IPV4:
                     return REACH_IPV4;
-                case NET_TOR:
+                case NET_ONION:
                     return REACH_PRIVATE;
             }
         case NET_TEREDO:
@@ -465,7 +487,7 @@ int CNetAddr::GetReachabilityFrom(const CNetAddr *paddrPartner) const {
                 case NET_IPV4:
                     return REACH_IPV4;
                 // either from Tor, or don't care about our address
-                case NET_TOR:
+                case NET_ONION:
                     return REACH_PRIVATE;
             }
     }
@@ -561,7 +583,7 @@ bool CService::GetSockAddr(struct sockaddr *paddr, socklen_t *addrlen) const {
 std::vector<uint8_t> CService::GetKey() const {
     std::vector<uint8_t> vKey;
     vKey.resize(18);
-    memcpy(&vKey[0], ip, 16);
+    memcpy(vKey.data(), ip, 16);
     vKey[16] = port / 0x100;
     vKey[17] = port & 0x0FF;
     return vKey;

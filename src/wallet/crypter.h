@@ -5,13 +5,11 @@
 #ifndef BITCOIN_WALLET_CRYPTER_H
 #define BITCOIN_WALLET_CRYPTER_H
 
-#include "keystore.h"
-#include "serialize.h"
-#include "support/allocators/secure.h"
+#include <keystore.h>
+#include <serialize.h>
+#include <support/allocators/secure.h>
 
 #include <atomic>
-
-class uint256;
 
 const unsigned int WALLET_CRYPTO_KEY_SIZE = 32;
 const unsigned int WALLET_CRYPTO_SALT_SIZE = 8;
@@ -118,7 +116,7 @@ public:
  */
 class CCryptoKeyStore : public CBasicKeyStore {
 private:
-    CKeyingMaterial vMasterKey;
+    CKeyingMaterial vMasterKey GUARDED_BY(cs_KeyStore);
 
     //! if fUseCrypto is true, mapKeys must be empty
     //! if fUseCrypto is false, vMasterKey must be empty
@@ -128,13 +126,17 @@ private:
     bool fDecryptionThoroughlyChecked;
 
 protected:
+    using CryptedKeyMap =
+        std::map<CKeyID, std::pair<CPubKey, std::vector<uint8_t>>>;
+
     bool SetCrypted();
 
     //! will encrypt previously unencrypted keys
     bool EncryptKeys(CKeyingMaterial &vMasterKeyIn);
 
-    bool Unlock(const CKeyingMaterial &vMasterKeyIn);
-    CryptedKeyMap mapCryptedKeys;
+    bool Unlock(const CKeyingMaterial &vMasterKeyIn,
+                bool accept_no_keys = false);
+    CryptedKeyMap mapCryptedKeys GUARDED_BY(cs_KeyStore);
 
 public:
     CCryptoKeyStore()

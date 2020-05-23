@@ -7,13 +7,13 @@
 #ifndef BITCOIN_RPC_SERVER_H
 #define BITCOIN_RPC_SERVER_H
 
-#include "amount.h"
-#include "rpc/command.h"
-#include "rpc/jsonrpcrequest.h"
-#include "rpc/protocol.h"
-#include "rwcollection.h"
-#include "uint256.h"
-#include "util.h"
+#include <amount.h>
+#include <rpc/command.h>
+#include <rpc/jsonrpcrequest.h>
+#include <rpc/protocol.h>
+#include <rwcollection.h>
+#include <uint256.h>
+#include <util/system.h>
 
 #include <cstdint>
 #include <functional>
@@ -26,28 +26,14 @@
 
 static const unsigned int DEFAULT_RPC_SERIALIZE_VERSION = 1;
 
-class ContextFreeRPCCommand;
+class CRPCCommand;
 
 namespace RPCServerSignals {
 void OnStarted(std::function<void()> slot);
 void OnStopped(std::function<void()> slot);
 } // namespace RPCServerSignals
 
-class CBlockIndex;
 class Config;
-class CNetAddr;
-
-/**
- * Wrapper for UniValue::VType, which includes typeAny: used to denote don't
- * care type. Only used by RPCTypeCheckObj.
- */
-struct UniValueType {
-    explicit UniValueType(UniValue::VType _type)
-        : typeAny(false), type(_type) {}
-    UniValueType() : typeAny(true) {}
-    bool typeAny;
-    UniValue::VType type;
-};
 
 typedef std::map<std::string, std::unique_ptr<RPCCommand>> RPCCommandMap;
 
@@ -93,28 +79,7 @@ void SetRPCWarmupFinished();
 /**
  * Returns the current warmup state
  */
-bool RPCIsInWarmup(std::string *statusOut);
-
-/**
- * Type-check arguments; throws JSONRPCError if wrong type given. Does not check
- * that the right number of arguments are passed, just that any passed are the
- * correct type.
- */
-void RPCTypeCheck(const UniValue &params,
-                  const std::list<UniValue::VType> &typesExpected,
-                  bool fAllowNull = false);
-
-/**
- * Type-check one argument; throws JSONRPCError if wrong type given.
- */
-void RPCTypeCheckArgument(const UniValue &value, UniValue::VType typeExpected);
-
-/**
- * Check for expected keys/value types in an Object.
- */
-void RPCTypeCheckObj(const UniValue &o,
-                     const std::map<std::string, UniValueType> &typesExpected,
-                     bool fAllowNull = false, bool fStrict = false);
+bool RPCIsInWarmup(std::string *outStatus);
 
 /**
  * Opaque base class for timers returned by NewTimerFunc.
@@ -148,7 +113,7 @@ public:
      * but only GUI RPC console, and to break the dependency of pcserver on
      * httprpc.
      */
-    virtual RPCTimerBase *NewTimer(std::function<void(void)> &func,
+    virtual RPCTimerBase *NewTimer(std::function<void()> &func,
                                    int64_t millis) = 0;
 };
 
@@ -171,53 +136,59 @@ void RPCUnsetTimerInterface(RPCTimerInterface *iface);
  * Run func nSeconds from now.
  * Overrides previous timer <name> (if any).
  */
-void RPCRunLater(const std::string &name, std::function<void(void)> func,
+void RPCRunLater(const std::string &name, std::function<void()> func,
                  int64_t nSeconds);
 
-typedef UniValue (*rpcfn_type)(Config &config,
-                               const JSONRPCRequest &jsonRequest);
-typedef UniValue (*const_rpcfn_type)(const Config &config,
-                                     const JSONRPCRequest &jsonRequest);
+using rpcfn_type = UniValue (*)(Config &config,
+                                const JSONRPCRequest &jsonRequest);
+using const_rpcfn_type = UniValue (*)(const Config &config,
+                                      const JSONRPCRequest &jsonRequest);
 
-class ContextFreeRPCCommand {
+class CRPCCommand {
 public:
+    //! RPC method handler reading request and assigning result. Should return
+    //! true if request is fully handled, false if it should be passed on to
+    //! subsequent handlers.
+    using Actor =
+        std::function<bool(Config &config, const JSONRPCRequest &request,
+                           UniValue &result, bool last_handler)>;
+
+    //! Constructor taking Actor callback supporting multiple handlers.
+    CRPCCommand(std::string _category, std::string _name, Actor _actor,
+                std::vector<std::string> _args, intptr_t _unique_id)
+        : category(std::move(_category)), name(std::move(_name)),
+          actor(std::move(_actor)), argNames(std::move(_args)),
+          unique_id(_unique_id) {}
+
+    //! Simplified constructor taking plain rpcfn_type function pointer.
+    CRPCCommand(const char *_category, const char *_name, rpcfn_type _fn,
+                std::initializer_list<const char *> _args)
+        : CRPCCommand(
+              _category, _name,
+              [_fn](Config &config, const JSONRPCRequest &request,
+                    UniValue &result, bool) {
+                  result = _fn(config, request);
+                  return true;
+              },
+              {_args.begin(), _args.end()}, intptr_t(_fn)) {}
+
+    //! Simplified constructor taking plain const_rpcfn_type function pointer.
+    CRPCCommand(const char *_category, const char *_name, const_rpcfn_type _fn,
+                std::initializer_list<const char *> _args)
+        : CRPCCommand(
+              _category, _name,
+              [_fn](const Config &config, const JSONRPCRequest &request,
+                    UniValue &result, bool) {
+                  result = _fn(config, request);
+                  return true;
+              },
+              {_args.begin(), _args.end()}, intptr_t(_fn)) {}
+
     std::string category;
     std::string name;
-
-private:
-    union {
-        rpcfn_type fn;
-        const_rpcfn_type cfn;
-    } actor;
-    bool useConstConfig;
-
-public:
+    Actor actor;
     std::vector<std::string> argNames;
-
-    ContextFreeRPCCommand(std::string _category, std::string _name,
-                          rpcfn_type _actor, std::vector<std::string> _argNames)
-        : category{std::move(_category)}, name{std::move(_name)},
-          useConstConfig{false}, argNames{std::move(_argNames)} {
-        actor.fn = _actor;
-    }
-
-    /**
-     * There are 2 constructors depending Config is const or not, so we
-     * can call the command through the proper pointer. Casting constness
-     * on parameters of function is undefined behavior.
-     */
-    ContextFreeRPCCommand(std::string _category, std::string _name,
-                          const_rpcfn_type _actor,
-                          std::vector<std::string> _argNames)
-        : category{std::move(_category)}, name{std::move(_name)},
-          useConstConfig{true}, argNames{std::move(_argNames)} {
-        actor.cfn = _actor;
-    }
-
-    UniValue call(Config &config, const JSONRPCRequest &jsonRequest) const {
-        return useConstConfig ? (*actor.cfn)(config, jsonRequest)
-                              : (*actor.fn)(config, jsonRequest);
-    };
+    intptr_t unique_id;
 };
 
 /**
@@ -225,11 +196,10 @@ public:
  */
 class CRPCTable {
 private:
-    std::map<std::string, const ContextFreeRPCCommand *> mapCommands;
+    std::map<std::string, std::vector<const CRPCCommand *>> mapCommands;
 
 public:
     CRPCTable();
-    const ContextFreeRPCCommand *operator[](const std::string &name) const;
     std::string help(Config &config, const std::string &name,
                      const JSONRPCRequest &helpreq) const;
 
@@ -248,13 +218,20 @@ public:
     std::vector<std::string> listCommands() const;
 
     /**
-     * Appends a ContextFreeRPCCommand to the dispatch table.
+     * Appends a CRPCCommand to the dispatch table.
+     *
      * Returns false if RPC server is already running (dump concurrency
      * protection).
-     * Commands cannot be overwritten (returns false).
+     *
+     * Commands with different method names but the same unique_id will
+     * be considered aliases, and only the first registered method name will
+     * show up in the help text command listing. Aliased commands do not have
+     * to have the same behavior. Server and client code can distinguish
+     * between calls based on method name, and aliased commands can also
+     * register different names, types, and numbers of parameters.
      */
-    bool appendCommand(const std::string &name,
-                       const ContextFreeRPCCommand *pcmd);
+    bool appendCommand(const std::string &name, const CRPCCommand *pcmd);
+    bool removeCommand(const std::string &name, const CRPCCommand *pcmd);
 };
 
 bool IsDeprecatedRPCEnabled(ArgsManager &args, const std::string &method);
@@ -284,7 +261,6 @@ void InterruptRPC();
 void StopRPC();
 std::string JSONRPCExecBatch(Config &config, RPCServer &rpcServer,
                              const JSONRPCRequest &req, const UniValue &vReq);
-void RPCNotifyBlockChange(bool ibd, const CBlockIndex *);
 
 /**
  * Retrieves any serialization flags requested in command line argument

@@ -2,18 +2,20 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#include "receivecoinsdialog.h"
-#include "ui_receivecoinsdialog.h"
+#include <wallet/wallet.h>
 
-#include "addressbookpage.h"
-#include "addresstablemodel.h"
-#include "bitcoinunits.h"
-#include "guiutil.h"
-#include "optionsmodel.h"
-#include "platformstyle.h"
-#include "receiverequestdialog.h"
-#include "recentrequeststablemodel.h"
-#include "walletmodel.h"
+#include <qt/forms/ui_receivecoinsdialog.h>
+#include <qt/receivecoinsdialog.h>
+
+#include <qt/addressbookpage.h>
+#include <qt/addresstablemodel.h>
+#include <qt/bitcoinunits.h>
+#include <qt/guiutil.h>
+#include <qt/optionsmodel.h>
+#include <qt/platformstyle.h>
+#include <qt/receiverequestdialog.h>
+#include <qt/recentrequeststablemodel.h>
+#include <qt/walletmodel.h>
 
 #include <QAction>
 #include <QCursor>
@@ -23,9 +25,10 @@
 #include <QTextDocument>
 
 ReceiveCoinsDialog::ReceiveCoinsDialog(const PlatformStyle *_platformStyle,
-                                       const Config *configIn, QWidget *parent)
-    : QDialog(parent), ui(new Ui::ReceiveCoinsDialog), columnResizingFixer(0),
-      model(0), platformStyle(_platformStyle), config(configIn) {
+                                       QWidget *parent)
+    : QDialog(parent), ui(new Ui::ReceiveCoinsDialog),
+      columnResizingFixer(nullptr), model(nullptr),
+      platformStyle(_platformStyle) {
     ui->setupUi(this);
 
     if (!_platformStyle->getImagesOnButtons()) {
@@ -58,14 +61,19 @@ ReceiveCoinsDialog::ReceiveCoinsDialog(const PlatformStyle *_platformStyle,
     contextMenu->addAction(copyAmountAction);
 
     // context menu signals
-    connect(ui->recentRequestsView, SIGNAL(customContextMenuRequested(QPoint)),
-            this, SLOT(showMenu(QPoint)));
-    connect(copyURIAction, SIGNAL(triggered()), this, SLOT(copyURI()));
-    connect(copyLabelAction, SIGNAL(triggered()), this, SLOT(copyLabel()));
-    connect(copyMessageAction, SIGNAL(triggered()), this, SLOT(copyMessage()));
-    connect(copyAmountAction, SIGNAL(triggered()), this, SLOT(copyAmount()));
+    connect(ui->recentRequestsView, &QWidget::customContextMenuRequested, this,
+            &ReceiveCoinsDialog::showMenu);
+    connect(copyURIAction, &QAction::triggered, this,
+            &ReceiveCoinsDialog::copyURI);
+    connect(copyLabelAction, &QAction::triggered, this,
+            &ReceiveCoinsDialog::copyLabel);
+    connect(copyMessageAction, &QAction::triggered, this,
+            &ReceiveCoinsDialog::copyMessage);
+    connect(copyAmountAction, &QAction::triggered, this,
+            &ReceiveCoinsDialog::copyAmount);
 
-    connect(ui->clearButton, SIGNAL(clicked()), this, SLOT(clear()));
+    connect(ui->clearButton, &QPushButton::clicked, this,
+            &ReceiveCoinsDialog::clear);
 }
 
 void ReceiveCoinsDialog::setModel(WalletModel *_model) {
@@ -74,8 +82,8 @@ void ReceiveCoinsDialog::setModel(WalletModel *_model) {
     if (_model && _model->getOptionsModel()) {
         _model->getRecentRequestsTableModel()->sort(
             RecentRequestsTableModel::Date, Qt::DescendingOrder);
-        connect(_model->getOptionsModel(), SIGNAL(displayUnitChanged(int)),
-                this, SLOT(updateDisplayUnit()));
+        connect(_model->getOptionsModel(), &OptionsModel::displayUnitChanged,
+                this, &ReceiveCoinsDialog::updateDisplayUnit);
         updateDisplayUnit();
 
         QTableView *tableView = ui->recentRequestsView;
@@ -94,13 +102,22 @@ void ReceiveCoinsDialog::setModel(WalletModel *_model) {
                                   AMOUNT_MINIMUM_COLUMN_WIDTH);
 
         connect(tableView->selectionModel(),
-                SIGNAL(selectionChanged(QItemSelection, QItemSelection)), this,
-                SLOT(recentRequestsView_selectionChanged(QItemSelection,
-                                                         QItemSelection)));
+                &QItemSelectionModel::selectionChanged, this,
+                &ReceiveCoinsDialog::recentRequestsView_selectionChanged);
         // Last 2 columns are set by the columnResizingFixer, when the table
         // geometry is ready.
         columnResizingFixer = new GUIUtil::TableViewLastColumnResizingFixer(
             tableView, AMOUNT_MINIMUM_COLUMN_WIDTH, DATE_COLUMN_WIDTH, this);
+
+        // Set the button to be enabled or disabled based on whether the wallet
+        // can give out new addresses.
+        ui->receiveButton->setEnabled(model->canGetAddresses());
+
+        // Enable/disable the receive button if the wallet is now able/unable to
+        // give out new addresses.
+        connect(model, &WalletModel::canGetAddressesChanged, [this] {
+            ui->receiveButton->setEnabled(model->canGetAddresses());
+        });
     }
 }
 
@@ -112,7 +129,6 @@ void ReceiveCoinsDialog::clear() {
     ui->reqAmount->clear();
     ui->reqLabel->setText("");
     ui->reqMessage->setText("");
-    ui->reuseAddress->setChecked(false);
     updateDisplayUnit();
 }
 
@@ -133,33 +149,19 @@ void ReceiveCoinsDialog::updateDisplayUnit() {
 
 void ReceiveCoinsDialog::on_receiveButton_clicked() {
     if (!model || !model->getOptionsModel() || !model->getAddressTableModel() ||
-        !model->getRecentRequestsTableModel())
+        !model->getRecentRequestsTableModel()) {
         return;
+    }
 
     QString address;
     QString label = ui->reqLabel->text();
-    if (ui->reuseAddress->isChecked()) {
-        /* Choose existing receiving address */
-        AddressBookPage dlg(platformStyle, AddressBookPage::ForSelection,
-                            AddressBookPage::ReceivingTab, this);
-        dlg.setModel(model->getAddressTableModel());
-        if (dlg.exec()) {
-            address = dlg.getReturnValue();
-            // If no label provided, use the previously used label
-            if (label.isEmpty()) {
-                label = model->getAddressTableModel()->labelForAddress(address);
-            }
-        } else {
-            return;
-        }
-    } else {
-        /* Generate new receiving address */
-        address = model->getAddressTableModel()->addRow(
-            AddressTableModel::Receive, label, "");
-    }
+    /* Generate new receiving address */
+    OutputType address_type = model->wallet().getDefaultAddressType();
+    address = model->getAddressTableModel()->addRow(AddressTableModel::Receive,
+                                                    label, "", address_type);
     SendCoinsRecipient info(address, label, ui->reqAmount->value(),
                             ui->reqMessage->text());
-    ReceiveRequestDialog *dialog = new ReceiveRequestDialog(config, this);
+    ReceiveRequestDialog *dialog = new ReceiveRequestDialog(this);
     dialog->setAttribute(Qt::WA_DeleteOnClose);
     dialog->setModel(model);
     dialog->setInfo(info);
@@ -174,7 +176,7 @@ void ReceiveCoinsDialog::on_recentRequestsView_doubleClicked(
     const QModelIndex &index) {
     const RecentRequestsTableModel *submodel =
         model->getRecentRequestsTableModel();
-    ReceiveRequestDialog *dialog = new ReceiveRequestDialog(config, this);
+    ReceiveRequestDialog *dialog = new ReceiveRequestDialog(this);
     dialog->setModel(model);
     dialog->setInfo(submodel->entry(index.row()).recipient);
     dialog->setAttribute(Qt::WA_DeleteOnClose);
@@ -192,8 +194,9 @@ void ReceiveCoinsDialog::recentRequestsView_selectionChanged(
 
 void ReceiveCoinsDialog::on_showRequestButton_clicked() {
     if (!model || !model->getRecentRequestsTableModel() ||
-        !ui->recentRequestsView->selectionModel())
+        !ui->recentRequestsView->selectionModel()) {
         return;
+    }
     QModelIndexList selection =
         ui->recentRequestsView->selectionModel()->selectedRows();
 
@@ -204,11 +207,14 @@ void ReceiveCoinsDialog::on_showRequestButton_clicked() {
 
 void ReceiveCoinsDialog::on_removeRequestButton_clicked() {
     if (!model || !model->getRecentRequestsTableModel() ||
-        !ui->recentRequestsView->selectionModel())
+        !ui->recentRequestsView->selectionModel()) {
         return;
+    }
     QModelIndexList selection =
         ui->recentRequestsView->selectionModel()->selectedRows();
-    if (selection.empty()) return;
+    if (selection.empty()) {
+        return;
+    }
     // correct for selection mode ContiguousSelection
     QModelIndex firstIndex = selection.at(0);
     model->getRecentRequestsTableModel()->removeRows(
@@ -238,11 +244,14 @@ void ReceiveCoinsDialog::keyPressEvent(QKeyEvent *event) {
 
 QModelIndex ReceiveCoinsDialog::selectedRow() {
     if (!model || !model->getRecentRequestsTableModel() ||
-        !ui->recentRequestsView->selectionModel())
+        !ui->recentRequestsView->selectionModel()) {
         return QModelIndex();
+    }
     QModelIndexList selection =
         ui->recentRequestsView->selectionModel()->selectedRows();
-    if (selection.empty()) return QModelIndex();
+    if (selection.empty()) {
+        return QModelIndex();
+    }
     // correct for selection mode ContiguousSelection
     QModelIndex firstIndex = selection.at(0);
     return firstIndex;
@@ -254,10 +263,10 @@ void ReceiveCoinsDialog::copyColumnToClipboard(int column) {
     if (!firstIndex.isValid()) {
         return;
     }
-    GUIUtil::setClipboard(
-        model->getRecentRequestsTableModel()
-            ->data(firstIndex.child(firstIndex.row(), column), Qt::EditRole)
-            .toString());
+    GUIUtil::setClipboard(model->getRecentRequestsTableModel()
+                              ->index(firstIndex.row(), column)
+                              .data(Qt::EditRole)
+                              .toString());
 }
 
 // context menu
@@ -277,8 +286,8 @@ void ReceiveCoinsDialog::copyURI() {
 
     const RecentRequestsTableModel *const submodel =
         model->getRecentRequestsTableModel();
-    const QString uri = GUIUtil::formatBitcoinURI(
-        *config, submodel->entry(sel.row()).recipient);
+    const QString uri =
+        GUIUtil::formatBitcoinURI(submodel->entry(sel.row()).recipient);
     GUIUtil::setClipboard(uri);
 }
 

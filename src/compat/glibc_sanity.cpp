@@ -3,7 +3,7 @@
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 #if defined(HAVE_CONFIG_H)
-#include "config/bitcoin-config.h"
+#include <config/bitcoin-config.h>
 #endif
 
 #include <cstddef>
@@ -26,13 +26,16 @@ namespace {
 template <unsigned int T> bool sanity_test_memcpy() {
     unsigned int memcpy_test[T];
     unsigned int memcpy_verify[T] = {};
-    for (unsigned int i = 0; i != T; ++i)
+    for (unsigned int i = 0; i != T; ++i) {
         memcpy_test[i] = i;
+    }
 
     memcpy_int(memcpy_verify, memcpy_test, sizeof(memcpy_test));
 
     for (unsigned int i = 0; i != T; ++i) {
-        if (memcpy_verify[i] != i) return false;
+        if (memcpy_verify[i] != i) {
+            return false;
+        }
     }
     return true;
 }
@@ -54,7 +57,9 @@ bool sanity_test_fdelt() {
 
 bool glibc_sanity_test() {
 #if defined(HAVE_SYS_SELECT_H)
-    if (!sanity_test_fdelt()) return false;
+    if (!sanity_test_fdelt()) {
+        return false;
+    }
 #endif
     return sanity_test_memcpy<1025>();
 }

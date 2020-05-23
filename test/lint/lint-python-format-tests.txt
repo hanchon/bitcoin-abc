@@ -1,4 +1,4 @@
-# This file contains python code with % string formatters to test the 
+# This file contains python code with % string formatters to test the
 # lint-python-format.py script.
 
 # Single line
@@ -32,7 +32,7 @@
     % ("1",
     #"4",
     "2", "3")
-    
+
 # Inlined comments are not supported
 # "test %s %s %s" \
 #     % ("1", #4,
@@ -68,3 +68,13 @@ f("%d %s" % (len("string"), "argument1"), argument2)
 "test % \
     1"
 a = 10 % 2
+
+# An array
+"test %s" % an_array[0]
+# A matrix
+"test %s" % an_array[0][0]
+# An array in an array
+["test %s" % an_array[0]]
+# An matrix in an array in a dict
+{"test":" ["test %s" % an_array[0][0]]}
+

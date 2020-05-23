@@ -1,4 +1,4 @@
-// Copyright (c) 2016 The Bitcoin Core developers
+// Copyright (c) 2016-2019 The Bitcoin Core developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
@@ -9,16 +9,14 @@
 // boost::test doesn't seem to make that practical (at least not in versions
 // available with common distros)
 
-#include <cstdlib>
-#include <map>
+#include <support/events.h>
 
-#include "support/events.h"
-
-#include "test/test_bitcoin.h"
-
-#include <vector>
+#include <test/setup_common.h>
 
 #include <boost/test/unit_test.hpp>
+
+#include <cstdlib>
+#include <map>
 
 static std::map<void *, short> tags;
 static std::map<void *, uint16_t> orders;
@@ -26,7 +24,9 @@ static uint16_t tagSequence = 0;
 
 static void *tag_malloc(size_t sz) {
     void *mem = malloc(sz);
-    if (!mem) return mem;
+    if (!mem) {
+        return mem;
+    }
     tags[mem]++;
     orders[mem] = tagSequence++;
     return mem;

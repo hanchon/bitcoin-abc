@@ -123,7 +123,8 @@ namespace tinyformat {}
 namespace tfm = tinyformat;
 
 // Error handling; calls assert() by default.
-#define TINYFORMAT_ERROR(reasonString) throw std::runtime_error(reasonString)
+#define TINYFORMAT_ERROR(reasonString)                                         \
+    throw tinyformat::format_error(reasonString)
 
 // Define for C++11 variadic templates which make the code shorter & more
 // general.  If you don't define this, C++11 support is autodetected below.
@@ -155,7 +156,7 @@ namespace tfm = tinyformat;
 #endif
 
 #ifdef __APPLE__
-// Workaround OSX linker warning: xcode uses different default symbol
+// Workaround OSX linker warning: Xcode uses different default symbol
 // visibilities for static libs vs executables (see issue #25)
 #define TINYFORMAT_HIDDEN __attribute__((visibility("hidden")))
 #else
@@ -163,6 +164,11 @@ namespace tfm = tinyformat;
 #endif
 
 namespace tinyformat {
+
+class format_error : public std::runtime_error {
+public:
+    format_error(const std::string &what) : std::runtime_error(what) {}
+};
 
 //------------------------------------------------------------------------------
 namespace detail {
@@ -551,7 +557,8 @@ namespace detail {
     // whereas a naive implementation based on inheritance does not.
     class FormatArg {
     public:
-        FormatArg() {}
+        FormatArg()
+            : m_value(nullptr), m_formatImpl(nullptr), m_toIntImpl(nullptr) {}
 
         template <typename T>
         explicit FormatArg(const T &value)
@@ -560,10 +567,16 @@ namespace detail {
 
         void format(std::ostream &out, const char *fmtBegin, const char *fmtEnd,
                     int ntrunc) const {
+            assert(m_value);
+            assert(m_formatImpl);
             m_formatImpl(out, fmtBegin, fmtEnd, ntrunc, m_value);
         }
 
-        int toInt() const { return m_toIntImpl(m_value); }
+        int toInt() const {
+            assert(m_value);
+            assert(m_toIntImpl);
+            return m_toIntImpl(m_value);
+        }
 
     private:
         template <typename T>
@@ -1072,6 +1085,10 @@ std::string format(const std::string &fmt, const Args &... args) {
 
 } // namespace tinyformat
 
+/**
+ * Format arguments and return the string or write to given std::ostream (see
+ * tinyformat::format doc for details)
+ */
 #define strprintf tfm::format
 
 #endif // TINYFORMAT_H_INCLUDED

@@ -1,14 +1,15 @@
-// Copyright (c) 2014-2016 The Bitcoin Core developers
+// Copyright (c) 2014-2019 The Bitcoin Core developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#include "chain.h"
-#include "test/test_bitcoin.h"
-#include "util.h"
+#include <chain.h>
+#include <util/system.h>
 
-#include <vector>
+#include <test/setup_common.h>
 
 #include <boost/test/unit_test.hpp>
+
+#include <vector>
 
 #define SKIPLIST_LENGTH 300000
 
@@ -39,18 +40,18 @@ BOOST_AUTO_TEST_CASE(skiplist_test) {
         BOOST_CHECK(vIndex[SKIPLIST_LENGTH - 1].GetAncestor(from) ==
                     &vIndex[from]);
         BOOST_CHECK(vIndex[from].GetAncestor(to) == &vIndex[to]);
-        BOOST_CHECK(vIndex[from].GetAncestor(0) == &vIndex[0]);
+        BOOST_CHECK(vIndex[from].GetAncestor(0) == vIndex.data());
     }
 }
 
 BOOST_AUTO_TEST_CASE(getlocator_test) {
     // Build a main chain 100000 blocks long.
-    std::vector<uint256> vHashMain(100000);
+    std::vector<BlockHash> vHashMain(100000);
     std::vector<CBlockIndex> vBlocksMain(100000);
-    for (unsigned int i = 0; i < vBlocksMain.size(); i++) {
+    for (size_t i = 0; i < vBlocksMain.size(); i++) {
         // Set the hash equal to the height, so we can quickly check the
         // distances.
-        vHashMain[i] = ArithToUint256(i);
+        vHashMain[i] = BlockHash(ArithToUint256(i));
         vBlocksMain[i].nHeight = i;
         vBlocksMain[i].pprev = i ? &vBlocksMain[i - 1] : nullptr;
         vBlocksMain[i].phashBlock = &vHashMain[i];
@@ -64,13 +65,15 @@ BOOST_AUTO_TEST_CASE(getlocator_test) {
     }
 
     // Build a branch that splits off at block 49999, 50000 blocks long.
-    std::vector<uint256> vHashSide(50000);
+    std::vector<BlockHash> vHashSide(50000);
     std::vector<CBlockIndex> vBlocksSide(50000);
-    for (unsigned int i = 0; i < vBlocksSide.size(); i++) {
+    for (size_t i = 0; i < vBlocksSide.size(); i++) {
         // Add 1<<128 to the hashes, so GetLow64() still returns the height.
-        vHashSide[i] = ArithToUint256(i + 50000 + (arith_uint256(1) << 128));
+        vHashSide[i] =
+            BlockHash(ArithToUint256(i + 50000 + (arith_uint256(1) << 128)));
         vBlocksSide[i].nHeight = i + 50000;
-        vBlocksSide[i].pprev = i ? &vBlocksSide[i - 1] : &vBlocksMain[49999];
+        vBlocksSide[i].pprev =
+            i ? &vBlocksSide[i - 1] : (vBlocksMain.data() + 49999);
         vBlocksSide[i].phashBlock = &vHashSide[i];
         vBlocksSide[i].BuildSkip();
         BOOST_CHECK_EQUAL(
@@ -106,7 +109,7 @@ BOOST_AUTO_TEST_CASE(getlocator_test) {
         // The further ones (excluding the last one) go back with exponential
         // steps.
         unsigned int dist = 2;
-        for (unsigned int i = 12; i < locator.vHave.size() - 1; i++) {
+        for (size_t i = 12; i < locator.vHave.size() - 1; i++) {
             BOOST_CHECK_EQUAL(UintToArith256(locator.vHave[i - 1]).GetLow64() -
                                   UintToArith256(locator.vHave[i]).GetLow64(),
                               dist);
@@ -116,11 +119,11 @@ BOOST_AUTO_TEST_CASE(getlocator_test) {
 }
 
 BOOST_AUTO_TEST_CASE(findearliestatleast_test) {
-    std::vector<uint256> vHashMain(100000);
+    std::vector<BlockHash> vHashMain(100000);
     std::vector<CBlockIndex> vBlocksMain(100000);
-    for (unsigned int i = 0; i < vBlocksMain.size(); i++) {
+    for (size_t i = 0; i < vBlocksMain.size(); i++) {
         // Set the hash equal to the height
-        vHashMain[i] = ArithToUint256(i);
+        vHashMain[i] = BlockHash(ArithToUint256(i));
         vBlocksMain[i].nHeight = i;
         vBlocksMain[i].pprev = i ? &vBlocksMain[i - 1] : nullptr;
         vBlocksMain[i].phashBlock = &vHashMain[i];
@@ -139,7 +142,7 @@ BOOST_AUTO_TEST_CASE(findearliestatleast_test) {
     }
     // Check that we set nTimeMax up correctly.
     unsigned int curTimeMax = 0;
-    for (unsigned int i = 0; i < vBlocksMain.size(); ++i) {
+    for (size_t i = 0; i < vBlocksMain.size(); ++i) {
         curTimeMax = std::max(curTimeMax, vBlocksMain[i].nTime);
         BOOST_CHECK(curTimeMax == vBlocksMain[i].nTimeMax);
     }
@@ -160,4 +163,52 @@ BOOST_AUTO_TEST_CASE(findearliestatleast_test) {
         BOOST_CHECK(vBlocksMain[r].GetAncestor(ret->nHeight) == ret);
     }
 }
+
+BOOST_AUTO_TEST_CASE(findearliestatleast_edge_test) {
+    std::list<CBlockIndex> blocks;
+    for (const unsigned int timeMax :
+         {100, 100, 100, 200, 200, 200, 300, 300, 300}) {
+        CBlockIndex *prev = blocks.empty() ? nullptr : &blocks.back();
+        blocks.emplace_back();
+        blocks.back().nHeight = prev ? prev->nHeight + 1 : 0;
+        blocks.back().pprev = prev;
+        blocks.back().BuildSkip();
+        blocks.back().nTimeMax = timeMax;
+    }
+
+    CChain chain;
+    chain.SetTip(&blocks.back());
+
+    BOOST_CHECK_EQUAL(chain.FindEarliestAtLeast(50)->nHeight, 0);
+    BOOST_CHECK_EQUAL(chain.FindEarliestAtLeast(100)->nHeight, 0);
+    BOOST_CHECK_EQUAL(chain.FindEarliestAtLeast(150)->nHeight, 3);
+    BOOST_CHECK_EQUAL(chain.FindEarliestAtLeast(200)->nHeight, 3);
+    BOOST_CHECK_EQUAL(chain.FindEarliestAtLeast(250)->nHeight, 6);
+    BOOST_CHECK_EQUAL(chain.FindEarliestAtLeast(300)->nHeight, 6);
+    BOOST_CHECK(!chain.FindEarliestAtLeast(350));
+
+    BOOST_CHECK_EQUAL(chain.FindEarliestAtLeast(0)->nHeight, 0);
+    BOOST_CHECK_EQUAL(chain.FindEarliestAtLeast(-1)->nHeight, 0);
+
+    BOOST_CHECK_EQUAL(
+        chain.FindEarliestAtLeast(std::numeric_limits<int64_t>::min())->nHeight,
+        0);
+    BOOST_CHECK_EQUAL(
+        chain.FindEarliestAtLeast(std::numeric_limits<unsigned int>::min())
+            ->nHeight,
+        0);
+    BOOST_CHECK_EQUAL(
+        chain
+            .FindEarliestAtLeast(
+                -int64_t(std::numeric_limits<unsigned int>::max()) - 1)
+            ->nHeight,
+        0);
+    BOOST_CHECK(
+        !chain.FindEarliestAtLeast(std::numeric_limits<int64_t>::max()));
+    BOOST_CHECK(
+        !chain.FindEarliestAtLeast(std::numeric_limits<unsigned int>::max()));
+    BOOST_CHECK(!chain.FindEarliestAtLeast(
+        int64_t(std::numeric_limits<unsigned int>::max()) + 1));
+}
+
 BOOST_AUTO_TEST_SUITE_END()

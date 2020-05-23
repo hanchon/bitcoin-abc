@@ -2,12 +2,15 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#include "zmqpublishnotifier.h"
-#include "config.h"
-#include "rpc/server.h"
-#include "streams.h"
-#include "util.h"
-#include "validation.h"
+#include <zmq/zmqpublishnotifier.h>
+
+#include <chain.h>
+#include <chainparams.h>
+#include <config.h>
+#include <rpc/server.h>
+#include <streams.h>
+#include <util/system.h>
+#include <validation.h>
 
 #include <cstdarg>
 
@@ -30,6 +33,7 @@ static int zmq_send_multipart(void *sock, const void *data, size_t size, ...) {
         int rc = zmq_msg_init_size(&msg, size);
         if (rc != 0) {
             zmqError("Unable to initialize ZMQ msg");
+            va_end(args);
             return -1;
         }
 
@@ -42,6 +46,7 @@ static int zmq_send_multipart(void *sock, const void *data, size_t size, ...) {
         if (rc == -1) {
             zmqError("Unable to send ZMQ msg");
             zmq_msg_close(&msg);
+            va_end(args);
             return -1;
         }
 
@@ -53,6 +58,7 @@ static int zmq_send_multipart(void *sock, const void *data, size_t size, ...) {
 
         size = va_arg(args, size_t);
     }
+    va_end(args);
     return 0;
 }
 
@@ -168,7 +174,8 @@ bool CZMQPublishRawBlockNotifier::NotifyBlock(const CBlockIndex *pindex) {
     {
         LOCK(cs_main);
         CBlock block;
-        if (!ReadBlockFromDisk(block, pindex, config)) {
+        if (!ReadBlockFromDisk(block, pindex,
+                               config.GetChainParams().GetConsensus())) {
             zmqError("Can't read block from disk");
             return false;
         }

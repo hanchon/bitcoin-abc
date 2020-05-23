@@ -18,8 +18,6 @@ from test_framework.messages import (
 )
 from test_framework.mininode import (
     mininode_lock,
-    network_thread_join,
-    network_thread_start,
     P2PInterface,
 )
 from test_framework.test_framework import BitcoinTestFramework
@@ -27,7 +25,6 @@ from test_framework.util import (
     assert_equal,
     connect_nodes_bi,
     disconnect_nodes,
-    sync_blocks,
     wait_until,
 )
 
@@ -67,13 +64,11 @@ class NodeNetworkLimitedTest(BitcoinTestFramework):
         disconnect_nodes(self.nodes[1], self.nodes[2])
 
     def setup_network(self):
-        super(NodeNetworkLimitedTest, self).setup_network()
-        self.disconnect_all()
+        self.add_nodes(self.num_nodes, self.extra_args)
+        self.start_nodes()
 
     def run_test(self):
         node = self.nodes[0].add_p2p_connection(P2PIgnoreInv())
-        network_thread_start()
-        node.wait_for_verack()
 
         expected_services = NODE_BLOOM | NODE_BITCOIN_CASH | NODE_NETWORK_LIMITED
 
@@ -87,10 +82,11 @@ class NodeNetworkLimitedTest(BitcoinTestFramework):
         self.log.info(
             "Mine enough blocks to reach the NODE_NETWORK_LIMITED range.")
         connect_nodes_bi(self.nodes[0], self.nodes[1])
-        blocks = self.nodes[1].generate(292)
-        sync_blocks([self.nodes[0], self.nodes[1]])
+        blocks = self.nodes[1].generatetoaddress(
+            292, self.nodes[1].get_deterministic_priv_key().address)
+        self.sync_blocks([self.nodes[0], self.nodes[1]])
 
-        self.log.info("Make sure we can max retrive block at tip-288.")
+        self.log.info("Make sure we can max retrieve block at tip-288.")
         # last block in valid range
         node.send_getdata_for_block(blocks[1])
         node.wait_for_block(int(blocks[1], 16), timeout=3)
@@ -103,10 +99,7 @@ class NodeNetworkLimitedTest(BitcoinTestFramework):
 
         self.log.info("Check local address relay, do a fresh connection.")
         self.nodes[0].disconnect_p2ps()
-        network_thread_join()
         node1 = self.nodes[0].add_p2p_connection(P2PIgnoreInv())
-        network_thread_start()
-        node1.wait_for_verack()
         node1.send_message(msg_verack())
 
         node1.wait_for_addr()
@@ -117,11 +110,12 @@ class NodeNetworkLimitedTest(BitcoinTestFramework):
         node1.wait_for_disconnect()
 
         # connect unsynced node 2 with pruned NODE_NETWORK_LIMITED peer
-        # because node 2 is in IBD and node 0 is a NODE_NETWORK_LIMITED peer, sync must not be possible
+        # because node 2 is in IBD and node 0 is a NODE_NETWORK_LIMITED peer,
+        # sync must not be possible
         connect_nodes_bi(self.nodes[0], self.nodes[2])
         try:
-            sync_blocks([self.nodes[0], self.nodes[2]], timeout=5)
-        except:
+            self.sync_blocks([self.nodes[0], self.nodes[2]], timeout=5)
+        except Exception:
             pass
         # node2 must remain at heigh 0
         assert_equal(self.nodes[2].getblockheader(
@@ -131,19 +125,22 @@ class NodeNetworkLimitedTest(BitcoinTestFramework):
         connect_nodes_bi(self.nodes[1], self.nodes[2])
 
         # sync must be possible
-        sync_blocks(self.nodes)
+        self.sync_blocks()
 
         # disconnect all peers
         self.disconnect_all()
 
         # mine 10 blocks on node 0 (pruned node)
-        self.nodes[0].generate(10)
+        self.nodes[0].generatetoaddress(
+            10, self.nodes[0].get_deterministic_priv_key().address)
 
-        # connect node1 (non pruned) with node0 (pruned) and check if the can sync
+        # connect node1 (non pruned) with node0 (pruned) and check if the can
+        # sync
         connect_nodes_bi(self.nodes[0], self.nodes[1])
 
-        # sync must be possible, node 1 is no longer in IBD and should therefore connect to node 0 (NODE_NETWORK_LIMITED)
-        sync_blocks([self.nodes[0], self.nodes[1]])
+        # sync must be possible, node 1 is no longer in IBD and should
+        # therefore connect to node 0 (NODE_NETWORK_LIMITED)
+        self.sync_blocks([self.nodes[0], self.nodes[1]])
 
 
 if __name__ == '__main__':

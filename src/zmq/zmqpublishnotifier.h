@@ -5,13 +5,13 @@
 #ifndef BITCOIN_ZMQ_ZMQPUBLISHNOTIFIER_H
 #define BITCOIN_ZMQ_ZMQPUBLISHNOTIFIER_H
 
-#include "zmqabstractnotifier.h"
+#include <zmq/zmqabstractnotifier.h>
 
 class CBlockIndex;
 
 class CZMQAbstractPublishNotifier : public CZMQAbstractNotifier {
 private:
-    //!< upcounting per message sequence number
+    //! upcounting per message sequence number
     uint32_t nSequence;
 
 public:

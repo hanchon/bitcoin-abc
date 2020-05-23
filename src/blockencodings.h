@@ -2,12 +2,10 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#ifndef BITCOIN_BLOCK_ENCODINGS_H
-#define BITCOIN_BLOCK_ENCODINGS_H
+#ifndef BITCOIN_BLOCKENCODINGS_H
+#define BITCOIN_BLOCKENCODINGS_H
 
-#include "primitives/block.h"
-
-#include <memory>
+#include <primitives/block.h>
 
 class Config;
 class CTxMemPool;
@@ -32,7 +30,7 @@ public:
 class BlockTransactionsRequest {
 public:
     // A BlockTransactionsRequest message
-    uint256 blockhash;
+    BlockHash blockhash;
     std::vector<uint32_t> indices;
 
     ADD_SERIALIZE_METHODS;
@@ -58,14 +56,14 @@ public:
                 }
             }
 
-            uint32_t offset = 0;
+            uint64_t offset = 0;
             for (auto &index : indices) {
-                if (uint64_t(index) + uint64_t(offset) >
+                if (uint64_t(index) + offset >
                     std::numeric_limits<uint32_t>::max()) {
                     throw std::ios_base::failure("indices overflowed 32 bits");
                 }
                 index = index + offset;
-                offset = index + 1;
+                offset = uint64_t(index) + 1;
             }
         } else {
             for (size_t i = 0; i < indices.size(); i++) {
@@ -80,7 +78,7 @@ public:
 class BlockTransactions {
 public:
     // A BlockTransactions message
-    uint256 blockhash;
+    BlockHash blockhash;
     std::vector<CTransactionRef> txn;
 
     BlockTransactions() {}
@@ -99,12 +97,12 @@ public:
             while (txn.size() < txn_size) {
                 txn.resize(std::min(uint64_t(1000 + txn.size()), txn_size));
                 for (; i < txn.size(); i++) {
-                    READWRITE(REF(TransactionCompressor(txn[i])));
+                    READWRITE(TransactionCompressor(txn[i]));
                 }
             }
         } else {
             for (size_t i = 0; i < txn.size(); i++) {
-                READWRITE(REF(TransactionCompressor(txn[i])));
+                READWRITE(TransactionCompressor(txn[i]));
             }
         }
     }
@@ -128,7 +126,7 @@ struct PrefilledTransaction {
             throw std::ios_base::failure("index overflowed 32-bits");
         }
         index = n;
-        READWRITE(REF(TransactionCompressor(tx)));
+        READWRITE(TransactionCompressor(tx));
     }
 };
 
@@ -166,7 +164,7 @@ public:
 
     CBlockHeaderAndShortTxIDs(const CBlock &block);
 
-    uint64_t GetShortID(const uint256 &txhash) const;
+    uint64_t GetShortID(const TxHash &txhash) const;
 
     size_t BlockTxCount() const {
         return shorttxids.size() + prefilledtxn.size();
@@ -208,6 +206,10 @@ public:
 
         READWRITE(prefilledtxn);
 
+        if (BlockTxCount() > std::numeric_limits<uint32_t>::max()) {
+            throw std::ios_base::failure("indices overflowed 32 bits");
+        }
+
         if (ser_action.ForRead()) {
             FillShortTxIDSelector();
         }
@@ -230,10 +232,10 @@ public:
     // reference> form.
     ReadStatus
     InitData(const CBlockHeaderAndShortTxIDs &cmpctblock,
-             const std::vector<std::pair<uint256, CTransactionRef>> &extra_txn);
+             const std::vector<std::pair<TxHash, CTransactionRef>> &extra_txn);
     bool IsTxAvailable(size_t index) const;
     ReadStatus FillBlock(CBlock &block,
                          const std::vector<CTransactionRef> &vtx_missing);
 };
 
-#endif
+#endif // BITCOIN_BLOCKENCODINGS_H

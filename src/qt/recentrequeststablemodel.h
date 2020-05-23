@@ -5,13 +5,11 @@
 #ifndef BITCOIN_QT_RECENTREQUESTSTABLEMODEL_H
 #define BITCOIN_QT_RECENTREQUESTSTABLEMODEL_H
 
-#include "walletmodel.h"
+#include <qt/walletmodel.h>
 
 #include <QAbstractTableModel>
 #include <QDateTime>
 #include <QStringList>
-
-class CWallet;
 
 class RecentRequestEntry {
 public:
@@ -58,7 +56,7 @@ class RecentRequestsTableModel : public QAbstractTableModel {
     Q_OBJECT
 
 public:
-    explicit RecentRequestsTableModel(CWallet *wallet, WalletModel *parent);
+    explicit RecentRequestsTableModel(WalletModel *parent);
     ~RecentRequestsTableModel();
 
     enum ColumnIndex {
@@ -79,7 +77,7 @@ public:
     QVariant headerData(int section, Qt::Orientation orientation,
                         int role) const override;
     QModelIndex index(int row, int column,
-                      const QModelIndex &parent) const override;
+                      const QModelIndex &parent = QModelIndex()) const override;
     bool removeRows(int row, int count,
                     const QModelIndex &parent = QModelIndex()) override;
     Qt::ItemFlags flags(const QModelIndex &index) const override;
@@ -98,7 +96,7 @@ private:
     WalletModel *walletModel;
     QStringList columns;
     QList<RecentRequestEntry> list;
-    int64_t nReceiveRequestsMaxId;
+    int64_t nReceiveRequestsMaxId{0};
 
     /** Updates the column title to "Amount (DisplayUnit)" and emits
      * headerDataChanged() signal for table headers to react. */

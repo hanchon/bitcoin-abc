@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright (c) 2014-2016 The Bitcoin Core developers
+# Copyright (c) 2014-2019 The Bitcoin Core developers
 # Distributed under the MIT software license, see the accompanying
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
 """Linux network utilities.
@@ -8,8 +8,7 @@ Roughly based on http://voorloopnul.com/blog/a-python-netstat-in-less-than-100-l
 """
 
 import array
-from binascii import unhexlify, hexlify
-import fcntl
+from binascii import unhexlify
 import os
 import socket
 import struct
@@ -99,6 +98,9 @@ def all_interfaces():
     '''
     Return all interfaces that are up
     '''
+    # Linux only, so only import when required
+    import fcntl
+
     is_64bits = sys.maxsize > 2**32
     struct_size = 40 if is_64bits else 32
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -139,17 +141,17 @@ def addr_to_hex(addr):
                 if i == 0 or i == (len(addr) - 1):
                     continue
                 x += 1  # :: skips to suffix
-                assert(x < 2)
+                assert x < 2
             else:  # two bytes per component
                 val = int(comp, 16)
                 sub[x].append(val >> 8)
                 sub[x].append(val & 0xff)
         nullbytes = 16 - len(sub[0]) - len(sub[1])
-        assert((x == 0 and nullbytes == 0) or (x == 1 and nullbytes > 0))
+        assert (x == 0 and nullbytes == 0) or (x == 1 and nullbytes > 0)
         addr = sub[0] + ([0] * nullbytes) + sub[1]
     else:
         raise ValueError('Could not parse address {}'.format(addr))
-    return hexlify(bytearray(addr)).decode('ascii')
+    return bytearray(addr).hex()
 
 
 def test_ipv6_local():

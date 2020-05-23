@@ -5,16 +5,17 @@
 #ifndef BITCOIN_MEMUSAGE_H
 #define BITCOIN_MEMUSAGE_H
 
-#include "indirectmap.h"
+#include <indirectmap.h>
+#include <prevector.h>
 
+#include <cassert>
 #include <cstdlib>
-
 #include <map>
+#include <memory>
 #include <set>
-#include <vector>
-
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
 namespace memusage {
 

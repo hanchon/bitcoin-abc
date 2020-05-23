@@ -1,18 +1,9 @@
-// Copyright (c) 2016 The Bitcoin Core developers
+// Copyright (c) 2016-2018 The Bitcoin Core developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#include "versionbits.h"
-
-#include "consensus/params.h"
-
-const struct BIP9DeploymentInfo
-    VersionBitsDeploymentInfo[Consensus::MAX_VERSION_BITS_DEPLOYMENTS] = {
-        {
-            /*.name =*/"testdummy",
-            /*.gbt_force =*/true,
-        },
-};
+#include <consensus/params.h>
+#include <versionbits.h>
 
 ThresholdState AbstractThresholdConditionChecker::GetStateFor(
     const CBlockIndex *pindexPrev, const Consensus::Params &params,
@@ -21,6 +12,11 @@ ThresholdState AbstractThresholdConditionChecker::GetStateFor(
     int nThreshold = Threshold(params);
     int64_t nTimeStart = BeginTime(params);
     int64_t nTimeTimeout = EndTime(params);
+
+    // Check if this deployment is always active.
+    if (nTimeStart == Consensus::BIP9Deployment::ALWAYS_ACTIVE) {
+        return ThresholdState::ACTIVE;
+    }
 
     // A block's state is always the same as that of the first of its period, so
     // it is computed based on a pindexPrev whose height equals a multiple of
@@ -104,9 +100,47 @@ ThresholdState AbstractThresholdConditionChecker::GetStateFor(
     return state;
 }
 
+BIP9Stats AbstractThresholdConditionChecker::GetStateStatisticsFor(
+    const CBlockIndex *pindex, const Consensus::Params &params) const {
+    BIP9Stats stats = {};
+
+    stats.period = Period(params);
+    stats.threshold = Threshold(params);
+
+    if (pindex == nullptr) {
+        return stats;
+    }
+
+    // Find beginning of period
+    const CBlockIndex *pindexEndOfPrevPeriod = pindex->GetAncestor(
+        pindex->nHeight - ((pindex->nHeight + 1) % stats.period));
+    stats.elapsed = pindex->nHeight - pindexEndOfPrevPeriod->nHeight;
+
+    // Count from current block to beginning of period
+    int count = 0;
+    const CBlockIndex *currentIndex = pindex;
+    while (pindexEndOfPrevPeriod->nHeight != currentIndex->nHeight) {
+        if (Condition(currentIndex, params)) {
+            count++;
+        }
+        currentIndex = currentIndex->pprev;
+    }
+
+    stats.count = count;
+    stats.possible =
+        (stats.period - stats.threshold) >= (stats.elapsed - count);
+
+    return stats;
+}
+
 int AbstractThresholdConditionChecker::GetStateSinceHeightFor(
     const CBlockIndex *pindexPrev, const Consensus::Params &params,
     ThresholdConditionCache &cache) const {
+    int64_t start_time = BeginTime(params);
+    if (start_time == Consensus::BIP9Deployment::ALWAYS_ACTIVE) {
+        return 0;
+    }
+
     const ThresholdState initialState = GetStateFor(pindexPrev, params, cache);
 
     // BIP 9 about state DEFINED: "The genesis block is by definition in this
@@ -162,7 +196,7 @@ protected:
         return params.nMinerConfirmationWindow;
     }
     int Threshold(const Consensus::Params &params) const override {
-        return params.nRuleChangeActivationThreshold;
+        return params.vDeployments[id].nActivationThreshold;
     }
 
     bool Condition(const CBlockIndex *pindex,
@@ -176,9 +210,10 @@ public:
     explicit VersionBitsConditionChecker(Consensus::DeploymentPos id_)
         : id(id_) {}
     uint32_t Mask(const Consensus::Params &params) const {
-        return ((uint32_t)1) << params.vDeployments[id].bit;
+        return uint32_t(1) << params.vDeployments[id].bit;
     }
 };
+
 } // namespace
 
 ThresholdState VersionBitsState(const CBlockIndex *pindexPrev,
@@ -187,6 +222,13 @@ ThresholdState VersionBitsState(const CBlockIndex *pindexPrev,
                                 VersionBitsCache &cache) {
     return VersionBitsConditionChecker(pos).GetStateFor(pindexPrev, params,
                                                         cache.caches[pos]);
+}
+
+BIP9Stats VersionBitsStatistics(const CBlockIndex *pindexPrev,
+                                const Consensus::Params &params,
+                                Consensus::DeploymentPos pos) {
+    return VersionBitsConditionChecker(pos).GetStateStatisticsFor(pindexPrev,
+                                                                  params);
 }
 
 int VersionBitsStateSinceHeight(const CBlockIndex *pindexPrev,

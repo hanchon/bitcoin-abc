@@ -1,14 +1,14 @@
 // Copyright (c) 2009-2010 Satoshi Nakamoto
 // Copyright (c) 2009-2016 The Bitcoin Core developers
-// Copyright (c) 2017-2018 The Bitcoin developers
+// Copyright (c) 2017-2019 The Bitcoin developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 #ifndef BITCOIN_SCRIPT_SIGENCODING_H
 #define BITCOIN_SCRIPT_SIGENCODING_H
 
-#include "script_error.h"
-#include "sighashtype.h"
+#include <script/script_error.h>
+#include <script/sighashtype.h>
 
 #include <cstdint>
 #include <vector>
@@ -51,6 +51,15 @@ bool CheckTransactionSignatureEncoding(const valtype &vchSig, uint32_t flags,
 bool CheckTransactionECDSASignatureEncoding(const valtype &vchSig,
                                             uint32_t flags,
                                             ScriptError *serror);
+
+/**
+ * Check that the signature provided to authentify a transaction is properly
+ * encoded Schnorr signature (or null). Signatures passed to the new-mode
+ * OP_CHECKMULTISIG and its verify variant must be checked using this function.
+ */
+bool CheckTransactionSchnorrSignatureEncoding(const valtype &vchSig,
+                                              uint32_t flags,
+                                              ScriptError *serror);
 
 /**
  * Check that a public key is encoded properly.

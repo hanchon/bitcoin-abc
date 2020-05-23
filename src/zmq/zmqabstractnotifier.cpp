@@ -2,8 +2,9 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#include "zmqabstractnotifier.h"
-#include "util.h"
+#include <zmq/zmqabstractnotifier.h>
+
+#include <util/system.h>
 
 CZMQAbstractNotifier::~CZMQAbstractNotifier() {
     assert(!psocket);

@@ -1,4 +1,4 @@
-// Copyright (c) 2018 The Bitcoin developers
+// Copyright (c) 2018-2020 The Bitcoin developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
@@ -8,28 +8,25 @@
 #include <cstdint>
 #include <vector>
 
+struct Amount;
 class CBlockIndex;
 class CCoinsViewCache;
-class Config;
 class CTransaction;
 class CValidationState;
 
-/**
- * Context-independent validity checks for coinbase and non-coinbase
- * transactions.
- */
-bool CheckRegularTransaction(const CTransaction &tx, CValidationState &state);
-bool CheckCoinbase(const CTransaction &tx, CValidationState &state);
-
 namespace Consensus {
+struct Params;
 
 /**
  * Check whether all inputs of this transaction are valid (no double spends and
  * amounts). This does not modify the UTXO set. This does not check scripts and
- * sigs. Preconditions: tx.IsCoinBase() is false.
+ * sigs.
+ * @param[out] txfee Set to the transaction fee if successful.
+ * Preconditions: tx.IsCoinBase() is false.
  */
 bool CheckTxInputs(const CTransaction &tx, CValidationState &state,
-                   const CCoinsViewCache &inputs, int nSpendHeight);
+                   const CCoinsViewCache &inputs, int nSpendHeight,
+                   Amount &txfee);
 
 } // namespace Consensus
 
@@ -39,9 +36,9 @@ bool CheckTxInputs(const CTransaction &tx, CValidationState &state,
  * simply characteristic that are suceptible to change over time such as feature
  * activation/deactivation and CLTV.
  */
-bool ContextualCheckTransaction(const Config &config, const CTransaction &tx,
-                                CValidationState &state, int nHeight,
-                                int64_t nLockTimeCutoff,
+bool ContextualCheckTransaction(const Consensus::Params &params,
+                                const CTransaction &tx, CValidationState &state,
+                                int nHeight, int64_t nLockTimeCutoff,
                                 int64_t nMedianTimePast);
 
 /**
@@ -65,36 +62,5 @@ bool EvaluateSequenceLocks(const CBlockIndex &block,
  */
 bool SequenceLocks(const CTransaction &tx, int flags,
                    std::vector<int> *prevHeights, const CBlockIndex &block);
-
-/**
- * Count ECDSA signature operations the old-fashioned (pre-0.6) way
- * @return number of sigops this transaction's outputs will produce when spent
- * @see CTransaction::FetchInputs
- */
-uint64_t GetSigOpCountWithoutP2SH(const CTransaction &tx, uint32_t flags);
-
-/**
- * Count ECDSA signature operations in pay-to-script-hash inputs.
- *
- * @param[in] mapInputs Map of previous transactions that have outputs we're
- * spending
- * @return maximum number of sigops required to validate this transaction's
- * inputs
- * @see CTransaction::FetchInputs
- */
-uint64_t GetP2SHSigOpCount(const CTransaction &tx,
-                           const CCoinsViewCache &mapInputs, uint32_t flags);
-
-/**
- * Compute total signature operation of a transaction.
- * @param[in] tx     Transaction for which we are computing the cost
- * @param[in] inputs Map of previous transactions that have outputs we're
- * spending
- * @param[in] flags  Script verification flags
- * @return Total signature operation cost of tx
- */
-uint64_t GetTransactionSigOpCount(const CTransaction &tx,
-                                  const CCoinsViewCache &inputs,
-                                  uint32_t flags);
 
 #endif // BITCOIN_CONSENSUS_TX_VERIFY_H

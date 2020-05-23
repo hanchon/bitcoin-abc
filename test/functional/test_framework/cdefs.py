@@ -48,7 +48,7 @@ def get_srcdir():
 
 # Slurp in consensus.h contents
 _consensus_h_fh = open(os.path.join(get_srcdir(), 'src', 'consensus',
-                                    'consensus.h'), 'rt')
+                                    'consensus.h'), 'rt', encoding='utf-8')
 _consensus_h_contents = _consensus_h_fh.read()
 _consensus_h_fh.close()
 
@@ -76,6 +76,12 @@ MAX_BLOCK_SIGOPS_PER_MB = 20000
 # The maximum allowed number of signature check operations per transaction
 # (network rule)
 MAX_TX_SIGOPS_COUNT = 20000
+
+
+# The minimum number of max_block_size bytes required per executed signature
+# check operation in a block. I.e. maximum_block_sigchecks = maximum_block_size
+# / BLOCK_MAXBYTES_MAXSIGCHECKS_RATIO (network rule).
+BLOCK_MAXBYTES_MAXSIGCHECKS_RATIO = 141
 
 # The maximum number of sigops we're willing to relay/mine in a single tx
 # (policy.h constant)

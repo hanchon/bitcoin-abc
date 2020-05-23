@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 # Copyright (c) 2011 Jeff Garzik
 #
 # Previous copyright, from python-jsonrpc/jsonrpc/proxy.py:
@@ -38,6 +39,7 @@ import decimal
 import http.client
 import json
 import logging
+import os
 import socket
 import time
 import urllib.parse
@@ -68,28 +70,20 @@ class AuthServiceProxy():
     __id_count = 0
 
     # ensure_ascii: escape unicode as \uXXXX, passed to json.dumps
-    def __init__(self, service_url, service_name=None, timeout=HTTP_TIMEOUT, connection=None, ensure_ascii=True):
+    def __init__(self, service_url, service_name=None,
+                 timeout=HTTP_TIMEOUT, connection=None, ensure_ascii=True):
         self.__service_url = service_url
         self._service_name = service_name
         self.ensure_ascii = ensure_ascii  # can be toggled on the fly by tests
         self.__url = urllib.parse.urlparse(service_url)
-        port = 80 if self.__url.port is None else self.__url.port
         user = None if self.__url.username is None else self.__url.username.encode(
             'utf8')
         passwd = None if self.__url.password is None else self.__url.password.encode(
             'utf8')
         authpair = user + b':' + passwd
         self.__auth_header = b'Basic ' + base64.b64encode(authpair)
-
-        if connection:
-            # Callables re-use the connection of the original proxy
-            self.__conn = connection
-        elif self.__url.scheme == 'https':
-            self.__conn = http.client.HTTPSConnection(
-                self.__url.hostname, port, timeout=timeout)
-        else:
-            self.__conn = http.client.HTTPConnection(
-                self.__url.hostname, port, timeout=timeout)
+        self.timeout = timeout
+        self._set_conn(connection)
 
     def __getattr__(self, name):
         if name.startswith('__') and name.endswith('__'):
@@ -97,7 +91,8 @@ class AuthServiceProxy():
             raise AttributeError
         if self._service_name is not None:
             name = "{}.{}".format(self._service_name, name)
-        return AuthServiceProxy(self.__service_url, name, connection=self.__conn)
+        return AuthServiceProxy(
+            self.__service_url, name, connection=self.__conn)
 
     def _request(self, method, path, postdata):
         '''
@@ -108,6 +103,11 @@ class AuthServiceProxy():
                    'User-Agent': USER_AGENT,
                    'Authorization': self.__auth_header,
                    'Content-type': 'application/json'}
+        if os.name == 'nt':
+            # Windows somehow does not like to re-use connections
+            # TODO: Find out why the connection would disconnect occasionally
+            # and make it reusable on Windows
+            self._set_conn()
         try:
             self.__conn.request(method, path, postdata, headers)
             return self._get_response()
@@ -162,13 +162,13 @@ class AuthServiceProxy():
         req_start_time = time.time()
         try:
             http_response = self.__conn.getresponse()
-        except socket.timeout as e:
+        except socket.timeout:
             raise JSONRPCException({
                 'code': -344,
                 'message': '{!r} RPC took longer than {} seconds. Consider '
                            'using larger timeout for calls that take '
-                           'longer to return.'.format((self._service_name,
-                                                       self.__conn.timeout))})
+                           'longer to return.'.format(self._service_name,
+                                                      self.__conn.timeout)})
         if http_response is None:
             raise JSONRPCException({
                 'code': -342, 'message': 'missing HTTP response from server'})
@@ -190,4 +190,17 @@ class AuthServiceProxy():
         return response
 
     def __truediv__(self, relative_uri):
-        return AuthServiceProxy("{}/{}".format(self.__service_url, relative_uri), self._service_name, connection=self.__conn)
+        return AuthServiceProxy("{}/{}".format(self.__service_url,
+                                               relative_uri), self._service_name, connection=self.__conn)
+
+    def _set_conn(self, connection=None):
+        port = 80 if self.__url.port is None else self.__url.port
+        if connection:
+            self.__conn = connection
+            self.timeout = connection.timeout
+        elif self.__url.scheme == 'https':
+            self.__conn = http.client.HTTPSConnection(
+                self.__url.hostname, port, timeout=self.timeout)
+        else:
+            self.__conn = http.client.HTTPConnection(
+                self.__url.hostname, port, timeout=self.timeout)

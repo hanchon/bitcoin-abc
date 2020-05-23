@@ -6,25 +6,29 @@
 #ifndef BITCOIN_TXDB_H
 #define BITCOIN_TXDB_H
 
-#include "blockfileinfo.h"
-#include "chain.h"
-#include "coins.h"
-#include "dbwrapper.h"
-#include "diskblockpos.h"
+#include <blockfileinfo.h>
+#include <coins.h>
+#include <dbwrapper.h>
+#include <flatfile.h>
+#include <primitives/block.h>
 
 #include "addressindex.h"
 #include "spentindex.h"
 #include "timestampindex.h"
 
 #include <map>
+#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
 
+struct BlockHash;
 class CBlockIndex;
 class CCoinsViewDBCursor;
-class uint256;
-class Config;
+
+namespace Consensus {
+struct Params;
+}
 
 //! No need to periodic flush if at least this much space still available.
 static constexpr int MAX_BLOCK_COINSDB_USAGE = 10;
@@ -42,31 +46,9 @@ static const int64_t nMaxBlockDBCache = 2;
 // Unlike for the UTXO database, for the txindex scenario the leveldb cache make
 // a meaningful difference:
 // https://github.com/bitcoin/bitcoin/pull/8273#issuecomment-229601991
-static const int64_t nMaxBlockDBAndTxIndexCache = 1024;
+static const int64_t nMaxTxIndexCache = 1024;
 //! Max memory allocated to coin DB specific cache (MiB)
 static const int64_t nMaxCoinsDBCache = 8;
-
-struct CDiskTxPos : public CDiskBlockPos {
-    unsigned int nTxOffset; // after header
-
-    ADD_SERIALIZE_METHODS;
-
-    template <typename Stream, typename Operation>
-    inline void SerializationOp(Stream &s, Operation ser_action) {
-        READWRITE(*static_cast<CDiskBlockPos *>(this));
-        READWRITE(VARINT(nTxOffset));
-    }
-
-    CDiskTxPos(const CDiskBlockPos &blockIn, unsigned int nTxOffsetIn)
-        : CDiskBlockPos(blockIn.nFile, blockIn.nPos), nTxOffset(nTxOffsetIn) {}
-
-    CDiskTxPos() { SetNull(); }
-
-    void SetNull() {
-        CDiskBlockPos::SetNull();
-        nTxOffset = 0;
-    }
-};
 
 /** CCoinsView backed by the coin database (chainstate/) */
 class CCoinsViewDB final : public CCoinsView {
@@ -79,9 +61,9 @@ public:
 
     bool GetCoin(const COutPoint &outpoint, Coin &coin) const override;
     bool HaveCoin(const COutPoint &outpoint) const override;
-    uint256 GetBestBlock() const override;
-    std::vector<uint256> GetHeadBlocks() const override;
-    bool BatchWrite(CCoinsMap &mapCoins, const uint256 &hashBlock) override;
+    BlockHash GetBestBlock() const override;
+    std::vector<BlockHash> GetHeadBlocks() const override;
+    bool BatchWrite(CCoinsMap &mapCoins, const BlockHash &hashBlock) override;
     CCoinsViewCursor *Cursor() const override;
 
     //! Attempt to update from an older database format.
@@ -103,7 +85,7 @@ public:
     void Next() override;
 
 private:
-    CCoinsViewDBCursor(CDBIterator *pcursorIn, const uint256 &hashBlockIn)
+    CCoinsViewDBCursor(CDBIterator *pcursorIn, const BlockHash &hashBlockIn)
         : CCoinsViewCursor(hashBlockIn), pcursor(pcursorIn) {}
     std::unique_ptr<CDBIterator> pcursor;
     std::pair<char, COutPoint> keyTmp;
@@ -117,18 +99,14 @@ public:
     explicit CBlockTreeDB(size_t nCacheSize, bool fMemory = false,
                           bool fWipe = false, bool compression = true, int maxOpenFiles = 1000);
 
-private:
-    CBlockTreeDB(const CBlockTreeDB &);
-    void operator=(const CBlockTreeDB &);
-
-public:
     bool WriteBatchSync(
         const std::vector<std::pair<int, const CBlockFileInfo *>> &fileInfo,
         int nLastFile, const std::vector<const CBlockIndex *> &blockinfo);
     bool ReadBlockFileInfo(int nFile, CBlockFileInfo &info);
     bool ReadLastBlockFile(int &nFile);
     bool WriteReindexing(bool fReindexing);
-    bool ReadReindexing(bool &fReindexing);
+
+    void ReadReindexing(bool &fReindexing);
     bool ReadTxIndex(const uint256 &txid, CDiskTxPos &pos);
     bool WriteTxIndex(const std::vector<std::pair<uint256, CDiskTxPos>> &vect);
     bool ReadSpentIndex(CSpentIndexKey &key, CSpentIndexValue &value);
@@ -145,11 +123,12 @@ public:
     bool ReadTimestampIndex(const unsigned int &high, const unsigned int &low, const bool fActiveOnly, std::vector<std::pair<uint256, unsigned int> > &vect);
     bool WriteTimestampBlockIndex(const CTimestampBlockIndexKey &blockhashIndex, const CTimestampBlockIndexValue &logicalts);
     bool ReadTimestampBlockIndex(const uint256 &hash, unsigned int &logicalTS);
+
     bool WriteFlag(const std::string &name, bool fValue);
     bool ReadFlag(const std::string &name, bool &fValue);
     bool LoadBlockIndexGuts(
-        const Config &config,
-        std::function<CBlockIndex *(const uint256 &)> insertBlockIndex);
+        const Consensus::Params &params,
+        std::function<CBlockIndex *(const BlockHash &)> insertBlockIndex);
 };
 
 #endif // BITCOIN_TXDB_H

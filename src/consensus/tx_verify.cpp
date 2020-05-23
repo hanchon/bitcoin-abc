@@ -1,18 +1,20 @@
-// Copyright (c) 2018 The Bitcoin developers
+// Copyright (c) 2018-2020 The Bitcoin developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#include "tx_verify.h"
+#include <consensus/tx_verify.h>
 
-#include "chain.h"
-#include "coins.h"
-#include "consensus/activation.h"
-#include "consensus/consensus.h"
-#include "consensus/validation.h"
-#include "primitives/transaction.h"
-#include "script/script_flags.h"
-#include "utilmoneystr.h" // For FormatMoney
-#include "version.h"      // For PROTOCOL_VERSION
+#include <amount.h>
+#include <chain.h>
+#include <coins.h>
+#include <consensus/activation.h>
+#include <consensus/consensus.h>
+#include <consensus/params.h>
+#include <consensus/validation.h>
+#include <primitives/transaction.h>
+#include <script/script_flags.h>
+#include <util/moneystr.h> // For FormatMoney
+#include <version.h>       // For PROTOCOL_VERSION
 
 static bool IsFinalTx(const CTransaction &tx, int nBlockHeight,
                       int64_t nBlockTime) {
@@ -35,9 +37,9 @@ static bool IsFinalTx(const CTransaction &tx, int nBlockHeight,
     return true;
 }
 
-bool ContextualCheckTransaction(const Config &config, const CTransaction &tx,
-                                CValidationState &state, int nHeight,
-                                int64_t nLockTimeCutoff,
+bool ContextualCheckTransaction(const Consensus::Params &params,
+                                const CTransaction &tx, CValidationState &state,
+                                int nHeight, int64_t nLockTimeCutoff,
                                 int64_t nMedianTimePast) {
     if (!IsFinalTx(tx, nHeight, nLockTimeCutoff)) {
         // While this is only one transaction, we use txns in the error to
@@ -46,10 +48,9 @@ bool ContextualCheckTransaction(const Config &config, const CTransaction &tx,
                          "non-final transaction");
     }
 
-    if (IsMagneticAnomalyEnabled(config, nHeight)) {
+    if (IsMagneticAnomalyEnabled(params, nHeight)) {
         // Size limit
-        if (::GetSerializeSize(tx, SER_NETWORK, PROTOCOL_VERSION) <
-            MIN_TX_SIZE) {
+        if (::GetSerializeSize(tx, PROTOCOL_VERSION) < MIN_TX_SIZE) {
             return state.DoS(100, false, REJECT_INVALID, "bad-txns-undersize");
         }
     }
@@ -151,140 +152,18 @@ bool SequenceLocks(const CTransaction &tx, int flags,
         block, CalculateSequenceLocks(tx, flags, prevHeights, block));
 }
 
-uint64_t GetSigOpCountWithoutP2SH(const CTransaction &tx, uint32_t flags) {
-    uint64_t nSigOps = 0;
-    for (const auto &txin : tx.vin) {
-        nSigOps += txin.scriptSig.GetSigOpCount(flags, false);
-    }
-    for (const auto &txout : tx.vout) {
-        nSigOps += txout.scriptPubKey.GetSigOpCount(flags, false);
-    }
-    return nSigOps;
-}
-
-uint64_t GetP2SHSigOpCount(const CTransaction &tx, const CCoinsViewCache &view,
-                           uint32_t flags) {
-    if ((flags & SCRIPT_VERIFY_P2SH) == 0 || tx.IsCoinBase()) {
-        return 0;
-    }
-
-    uint64_t nSigOps = 0;
-    for (auto &i : tx.vin) {
-        const CTxOut &prevout = view.GetOutputFor(i);
-        if (prevout.scriptPubKey.IsPayToScriptHash()) {
-            nSigOps += prevout.scriptPubKey.GetSigOpCount(flags, i.scriptSig);
-        }
-    }
-
-    return nSigOps;
-}
-
-uint64_t GetTransactionSigOpCount(const CTransaction &tx,
-                                  const CCoinsViewCache &view, uint32_t flags) {
-    return GetSigOpCountWithoutP2SH(tx, flags) +
-           GetP2SHSigOpCount(tx, view, flags);
-}
-
-static bool CheckTransactionCommon(const CTransaction &tx,
-                                   CValidationState &state) {
-    // Basic checks that don't depend on any context
-    if (tx.vin.empty()) {
-        return state.DoS(10, false, REJECT_INVALID, "bad-txns-vin-empty");
-    }
-
-    if (tx.vout.empty()) {
-        return state.DoS(10, false, REJECT_INVALID, "bad-txns-vout-empty");
-    }
-
-    // Size limit
-    if (::GetSerializeSize(tx, SER_NETWORK, PROTOCOL_VERSION) > MAX_TX_SIZE) {
-        return state.DoS(100, false, REJECT_INVALID, "bad-txns-oversize");
-    }
-
-    // Check for negative or overflow output values
-    Amount nValueOut = Amount::zero();
-    for (const auto &txout : tx.vout) {
-        if (txout.nValue < Amount::zero()) {
-            return state.DoS(100, false, REJECT_INVALID,
-                             "bad-txns-vout-negative");
-        }
-
-        if (txout.nValue > MAX_MONEY) {
-            return state.DoS(100, false, REJECT_INVALID,
-                             "bad-txns-vout-toolarge");
-        }
-
-        nValueOut += txout.nValue;
-        if (!MoneyRange(nValueOut)) {
-            return state.DoS(100, false, REJECT_INVALID,
-                             "bad-txns-txouttotal-toolarge");
-        }
-    }
-
-    if (GetSigOpCountWithoutP2SH(tx, SCRIPT_ENABLE_CHECKDATASIG) >
-        MAX_TX_SIGOPS_COUNT) {
-        return state.DoS(100, false, REJECT_INVALID, "bad-txn-sigops");
-    }
-
-    return true;
-}
-
-bool CheckCoinbase(const CTransaction &tx, CValidationState &state) {
-    if (!tx.IsCoinBase()) {
-        return state.DoS(100, false, REJECT_INVALID, "bad-cb-missing", false,
-                         "first tx is not coinbase");
-    }
-
-    if (!CheckTransactionCommon(tx, state)) {
-        // CheckTransactionCommon fill in the state.
-        return false;
-    }
-
-    if (tx.vin[0].scriptSig.size() < 2 ||
-        tx.vin[0].scriptSig.size() > MAX_COINBASE_SCRIPTSIG_SIZE) {
-        return state.DoS(100, false, REJECT_INVALID, "bad-cb-length");
-    }
-
-    return true;
-}
-
-bool CheckRegularTransaction(const CTransaction &tx, CValidationState &state) {
-    if (tx.IsCoinBase()) {
-        return state.DoS(100, false, REJECT_INVALID, "bad-tx-coinbase");
-    }
-
-    if (!CheckTransactionCommon(tx, state)) {
-        // CheckTransactionCommon fill in the state.
-        return false;
-    }
-
-    std::unordered_set<COutPoint, SaltedOutpointHasher> vInOutPoints;
-    for (const auto &txin : tx.vin) {
-        if (txin.prevout.IsNull()) {
-            return state.DoS(10, false, REJECT_INVALID,
-                             "bad-txns-prevout-null");
-        }
-
-        if (!vInOutPoints.insert(txin.prevout).second) {
-            return state.DoS(100, false, REJECT_INVALID,
-                             "bad-txns-inputs-duplicate");
-        }
-    }
-
-    return true;
-}
-
 namespace Consensus {
 bool CheckTxInputs(const CTransaction &tx, CValidationState &state,
-                   const CCoinsViewCache &inputs, int nSpendHeight) {
-    // This doesn't trigger the DoS code on purpose; if it did, it would make it
-    // easier for an attacker to attempt to split the network.
+                   const CCoinsViewCache &inputs, int nSpendHeight,
+                   Amount &txfee) {
+    // are the actual inputs available?
     if (!inputs.HaveInputs(tx)) {
-        return state.Invalid(false, 0, "", "Inputs unavailable");
+        return state.DoS(100, false, REJECT_INVALID,
+                         "bad-txns-inputs-missingorspent", false,
+                         strprintf("%s: inputs missing/spent", __func__));
     }
 
     Amount nValueIn = Amount::zero();
-    Amount nFees = Amount::zero();
     for (const auto &in : tx.vin) {
         const COutPoint &prevout = in.prevout;
         const Coin &coin = inputs.AccessCoin(prevout);
@@ -309,24 +188,21 @@ bool CheckTxInputs(const CTransaction &tx, CValidationState &state,
         }
     }
 
-    if (nValueIn < tx.GetValueOut()) {
+    const Amount value_out = tx.GetValueOut();
+    if (nValueIn < value_out) {
         return state.DoS(
             100, false, REJECT_INVALID, "bad-txns-in-belowout", false,
             strprintf("value in (%s) < value out (%s)", FormatMoney(nValueIn),
-                      FormatMoney(tx.GetValueOut())));
+                      FormatMoney(value_out)));
     }
 
     // Tally transaction fees
-    Amount nTxFee = nValueIn - tx.GetValueOut();
-    if (nTxFee < Amount::zero()) {
-        return state.DoS(100, false, REJECT_INVALID, "bad-txns-fee-negative");
-    }
-
-    nFees += nTxFee;
-    if (!MoneyRange(nFees)) {
+    const Amount txfee_aux = nValueIn - value_out;
+    if (!MoneyRange(txfee_aux)) {
         return state.DoS(100, false, REJECT_INVALID, "bad-txns-fee-outofrange");
     }
 
+    txfee = txfee_aux;
     return true;
 }
 } // namespace Consensus

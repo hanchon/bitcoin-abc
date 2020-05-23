@@ -3,26 +3,20 @@
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 #if defined(HAVE_CONFIG_H)
-#include "config/bitcoin-config.h"
+#include <config/bitcoin-config.h>
 #endif
 
-#include "optionsmodel.h"
+#include <qt/optionsmodel.h>
 
-#include "bitcoinunits.h"
-#include "guiutil.h"
-
-#include "amount.h"
-#include "init.h"
-#include "intro.h"
-#include "net.h"
-#include "netbase.h"
-#include "txdb.h"       // for -dbcache defaults
-#include "validation.h" // For DEFAULT_SCRIPTCHECK_THREADS
-
-#ifdef ENABLE_WALLET
-#include "wallet/wallet.h"
-#include "wallet/walletdb.h"
-#endif
+#include <amount.h>
+#include <interfaces/node.h>
+#include <net.h>
+#include <netbase.h>
+#include <qt/bitcoinunits.h>
+#include <qt/guiutil.h>
+#include <qt/intro.h>
+#include <txdb.h>       // for -dbcache defaults
+#include <validation.h> // For DEFAULT_SCRIPTCHECK_THREADS
 
 #include <QNetworkProxy>
 #include <QSettings>
@@ -30,8 +24,11 @@
 
 const char *DEFAULT_GUI_PROXY_HOST = "127.0.0.1";
 
-OptionsModel::OptionsModel(QObject *parent, bool resetSettings)
-    : QAbstractListModel(parent) {
+static const QString GetDefaultProxyAddress();
+
+OptionsModel::OptionsModel(interfaces::Node &node, QObject *parent,
+                           bool resetSettings)
+    : QAbstractListModel(parent), m_node(node) {
     Init(resetSettings);
 }
 
@@ -101,10 +98,24 @@ void OptionsModel::Init(bool resetSettings) {
     // by command-line and show this in the UI.
 
     // Main
+    if (!settings.contains("bPrune")) {
+        settings.setValue("bPrune", false);
+    }
+    if (!settings.contains("nPruneSize")) {
+        settings.setValue("nPruneSize", 2);
+    }
+    // Convert prune size to MB:
+    const uint64_t nPruneSizeMB = settings.value("nPruneSize").toInt() * 1000;
+    if (!m_node.softSetArg("-prune", settings.value("bPrune").toBool()
+                                         ? std::to_string(nPruneSizeMB)
+                                         : "0")) {
+        addOverriddenOption("-prune");
+    }
+
     if (!settings.contains("nDatabaseCache")) {
         settings.setValue("nDatabaseCache", (qint64)nDefaultDbCache);
     }
-    if (!gArgs.SoftSetArg(
+    if (!m_node.softSetArg(
             "-dbcache",
             settings.value("nDatabaseCache").toString().toStdString())) {
         addOverriddenOption("-dbcache");
@@ -113,7 +124,7 @@ void OptionsModel::Init(bool resetSettings) {
     if (!settings.contains("nThreadsScriptVerif")) {
         settings.setValue("nThreadsScriptVerif", DEFAULT_SCRIPTCHECK_THREADS);
     }
-    if (!gArgs.SoftSetArg(
+    if (!m_node.softSetArg(
             "-par",
             settings.value("nThreadsScriptVerif").toString().toStdString())) {
         addOverriddenOption("-par");
@@ -128,7 +139,7 @@ void OptionsModel::Init(bool resetSettings) {
     if (!settings.contains("bSpendZeroConfChange")) {
         settings.setValue("bSpendZeroConfChange", true);
     }
-    if (!gArgs.SoftSetBoolArg(
+    if (!m_node.softSetBoolArg(
             "-spendzeroconfchange",
             settings.value("bSpendZeroConfChange").toBool())) {
         addOverriddenOption("-spendzeroconfchange");
@@ -139,14 +150,14 @@ void OptionsModel::Init(bool resetSettings) {
     if (!settings.contains("fUseUPnP")) {
         settings.setValue("fUseUPnP", DEFAULT_UPNP);
     }
-    if (!gArgs.SoftSetBoolArg("-upnp", settings.value("fUseUPnP").toBool())) {
+    if (!m_node.softSetBoolArg("-upnp", settings.value("fUseUPnP").toBool())) {
         addOverriddenOption("-upnp");
     }
 
     if (!settings.contains("fListen")) {
         settings.setValue("fListen", DEFAULT_LISTEN);
     }
-    if (!gArgs.SoftSetBoolArg("-listen", settings.value("fListen").toBool())) {
+    if (!m_node.softSetBoolArg("-listen", settings.value("fListen").toBool())) {
         addOverriddenOption("-listen");
     }
 
@@ -154,13 +165,11 @@ void OptionsModel::Init(bool resetSettings) {
         settings.setValue("fUseProxy", false);
     }
     if (!settings.contains("addrProxy")) {
-        settings.setValue("addrProxy",
-                          QString("%1:%2").arg(DEFAULT_GUI_PROXY_HOST,
-                                               DEFAULT_GUI_PROXY_PORT));
+        settings.setValue("addrProxy", GetDefaultProxyAddress());
     }
     // Only try to set -proxy, if user has enabled fUseProxy
     if (settings.value("fUseProxy").toBool() &&
-        !gArgs.SoftSetArg(
+        !m_node.softSetArg(
             "-proxy", settings.value("addrProxy").toString().toStdString())) {
         addOverriddenOption("-proxy");
     } else if (!settings.value("fUseProxy").toBool() &&
@@ -172,13 +181,11 @@ void OptionsModel::Init(bool resetSettings) {
         settings.setValue("fUseSeparateProxyTor", false);
     }
     if (!settings.contains("addrSeparateProxyTor")) {
-        settings.setValue("addrSeparateProxyTor",
-                          QString("%1:%2").arg(DEFAULT_GUI_PROXY_HOST,
-                                               DEFAULT_GUI_PROXY_PORT));
+        settings.setValue("addrSeparateProxyTor", GetDefaultProxyAddress());
     }
     // Only try to set -onion, if user has enabled fUseSeparateProxyTor
     if (settings.value("fUseSeparateProxyTor").toBool() &&
-        !gArgs.SoftSetArg(
+        !m_node.softSetArg(
             "-onion",
             settings.value("addrSeparateProxyTor").toString().toStdString())) {
         addOverriddenOption("-onion");
@@ -191,7 +198,7 @@ void OptionsModel::Init(bool resetSettings) {
     if (!settings.contains("language")) {
         settings.setValue("language", "");
     }
-    if (!gArgs.SoftSetArg(
+    if (!m_node.softSetArg(
             "-lang", settings.value("language").toString().toStdString())) {
         addOverriddenOption("-lang");
     }
@@ -199,8 +206,30 @@ void OptionsModel::Init(bool resetSettings) {
     language = settings.value("language").toString();
 }
 
+/**
+ * Helper function to copy contents from one QSettings to another.
+ * By using allKeys this also covers nested settings in a hierarchy.
+ */
+static void CopySettings(QSettings &dst, const QSettings &src) {
+    for (const QString &key : src.allKeys()) {
+        dst.setValue(key, src.value(key));
+    }
+}
+
+/** Back up a QSettings to an ini-formatted file. */
+static void BackupSettings(const fs::path &filename, const QSettings &src) {
+    qWarning() << "Backing up GUI settings to"
+               << GUIUtil::boostPathToQString(filename);
+    QSettings dst(GUIUtil::boostPathToQString(filename), QSettings::IniFormat);
+    dst.clear();
+    CopySettings(dst, src);
+}
+
 void OptionsModel::Reset() {
     QSettings settings;
+
+    // Backup old settings to chain-specific datadir for troubleshooting
+    BackupSettings(GetDataDir(true) / "guisettings.ini.bak", settings);
 
     // Save the strDataDir setting
     QString dataDir = Intro::getDefaultDataDirectory();
@@ -254,6 +283,12 @@ static void SetProxySetting(QSettings &settings, const QString &name,
     settings.setValue(name, ip_port.ip + ":" + ip_port.port);
 }
 
+static const QString GetDefaultProxyAddress() {
+    return QString("%1:%2")
+        .arg(DEFAULT_GUI_PROXY_HOST)
+        .arg(DEFAULT_GUI_PROXY_PORT);
+}
+
 // read QSettings values and return them
 QVariant OptionsModel::data(const QModelIndex &index, int role) const {
     if (role == Qt::EditRole) {
@@ -302,6 +337,10 @@ QVariant OptionsModel::data(const QModelIndex &index, int role) const {
                 return settings.value("language");
             case CoinControlFeatures:
                 return fCoinControlFeatures;
+            case Prune:
+                return settings.value("bPrune");
+            case PruneSize:
+                return settings.value("nPruneSize");
             case DatabaseCache:
                 return settings.value("nDatabaseCache");
             case ThreadsScriptVerif:
@@ -336,12 +375,7 @@ bool OptionsModel::setData(const QModelIndex &index, const QVariant &value,
                 break;
             case MapPortUPnP: // core option - can be changed on-the-fly
                 settings.setValue("fUseUPnP", value.toBool());
-                if (value.toBool()) {
-                    StartMapPort();
-                } else {
-                    InterruptMapPort();
-                    StopMapPort();
-                }
+                m_node.mapPort(value.toBool());
                 break;
             case MinimizeOnClose:
                 fMinimizeOnClose = value.toBool();
@@ -428,6 +462,18 @@ bool OptionsModel::setData(const QModelIndex &index, const QVariant &value,
                 settings.setValue("fCoinControlFeatures", fCoinControlFeatures);
                 Q_EMIT coinControlFeaturesChanged(fCoinControlFeatures);
                 break;
+            case Prune:
+                if (settings.value("bPrune") != value) {
+                    settings.setValue("bPrune", value);
+                    setRestartRequired(true);
+                }
+                break;
+            case PruneSize:
+                if (settings.value("nPruneSize") != value) {
+                    settings.setValue("nPruneSize", value);
+                    setRestartRequired(true);
+                }
+                break;
             case DatabaseCache:
                 if (settings.value("nDatabaseCache") != value) {
                     settings.setValue("nDatabaseCache", value);
@@ -471,14 +517,15 @@ bool OptionsModel::getProxySettings(QNetworkProxy &proxy) const {
     // Directly query current base proxy, because
     // GUI settings can be overridden with -proxy.
     proxyType curProxy;
-    if (GetProxy(NET_IPV4, curProxy)) {
+    if (m_node.getProxy(NET_IPV4, curProxy)) {
         proxy.setType(QNetworkProxy::Socks5Proxy);
         proxy.setHostName(QString::fromStdString(curProxy.proxy.ToStringIP()));
         proxy.setPort(curProxy.proxy.GetPort());
 
         return true;
-    } else
+    } else {
         proxy.setType(QNetworkProxy::NoProxy);
+    }
 
     return false;
 }
@@ -507,9 +554,24 @@ void OptionsModel::checkAndMigrate() {
         // see https://github.com/bitcoin/bitcoin/pull/8273
         // force people to upgrade to the new value if they are using 100MB
         if (settingsVersion < 130000 && settings.contains("nDatabaseCache") &&
-            settings.value("nDatabaseCache").toLongLong() == 100)
+            settings.value("nDatabaseCache").toLongLong() == 100) {
             settings.setValue("nDatabaseCache", (qint64)nDefaultDbCache);
+        }
 
         settings.setValue(strSettingsVersionKey, CLIENT_VERSION);
+    }
+
+    // Overwrite the 'addrProxy' setting in case it has been set to an illegal
+    // default value (see issue #12623; PR #12650).
+    if (settings.contains("addrProxy") &&
+        settings.value("addrProxy").toString().endsWith("%2")) {
+        settings.setValue("addrProxy", GetDefaultProxyAddress());
+    }
+
+    // Overwrite the 'addrSeparateProxyTor' setting in case it has been set to
+    // an illegal default value (see issue #12623; PR #12650).
+    if (settings.contains("addrSeparateProxyTor") &&
+        settings.value("addrSeparateProxyTor").toString().endsWith("%2")) {
+        settings.setValue("addrSeparateProxyTor", GetDefaultProxyAddress());
     }
 }

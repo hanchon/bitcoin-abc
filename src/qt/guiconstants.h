@@ -27,8 +27,6 @@ static const bool DEFAULT_SPLASHSCREEN = true;
 #define COLOR_BAREADDRESS QColor(140, 140, 140)
 /* Transaction list -- TX status decoration - open until date */
 #define COLOR_TX_STATUS_OPENUNTILDATE QColor(64, 64, 255)
-/* Transaction list -- TX status decoration - offline */
-#define COLOR_TX_STATUS_OFFLINE QColor(192, 192, 192)
 /* Transaction list -- TX status decoration - danger, tx needs attention */
 #define COLOR_TX_STATUS_DANGER QColor(200, 100, 100)
 /* Transaction list -- TX status decoration - default color */
@@ -52,5 +50,6 @@ static const int MAX_URI_LENGTH = 255;
 #define QAPP_ORG_DOMAIN "bitcoinabc.org"
 #define QAPP_APP_NAME_DEFAULT "BitcoinABC-Qt"
 #define QAPP_APP_NAME_TESTNET "BitcoinABC-Qt-testnet"
+#define QAPP_APP_NAME_REGTEST "BitcoinABC-Qt-regtest"
 
 #endif // BITCOIN_QT_GUICONSTANTS_H

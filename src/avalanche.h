@@ -1,16 +1,18 @@
-// Copyright (c) 2018 The Bitcoin developers
+// Copyright (c) 2018-2019 The Bitcoin developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 #ifndef BITCOIN_AVALANCHE_H
 #define BITCOIN_AVALANCHE_H
 
-#include "blockindexworkcomparator.h"
-#include "net.h"
-#include "protocol.h" // for CInv
-#include "rwcollection.h"
-#include "serialize.h"
-#include "uint256.h"
+#include <blockindexworkcomparator.h>
+#include <eventloop.h>
+#include <key.h>
+#include <net.h>
+#include <protocol.h> // for CInv
+#include <rwcollection.h>
+#include <serialize.h>
+#include <uint256.h>
 
 #include <boost/multi_index/composite_key.hpp>
 #include <boost/multi_index/hashed_index.hpp>
@@ -20,7 +22,6 @@
 
 #include <atomic>
 #include <chrono>
-#include <condition_variable>
 #include <cstdint>
 #include <vector>
 
@@ -30,10 +31,23 @@ class CScheduler;
 
 namespace {
 /**
+ * Is avalanche enabled by default.
+ */
+static const bool AVALANCHE_DEFAULT_ENABLED = false;
+
+/**
  * Finalization score.
  */
 static const int AVALANCHE_FINALIZATION_SCORE = 128;
 
+/**
+ * Maximum item that can be polled at once.
+ */
+static const size_t AVALANCHE_MAX_ELEMENT_POLL = 16;
+/**
+ * Avalanche default cooldown in milliseconds.
+ */
+static const size_t AVALANCHE_DEFAULT_COOLDOWN = 100;
 /**
  * How long before we consider that a query timed out.
  */
@@ -48,7 +62,7 @@ static const int AVALANCHE_MAX_INFLIGHT_POLL = 10;
  * Special NodeId that represent no node.
  */
 static const NodeId NO_NODE = -1;
-}
+} // namespace
 
 /**
  * Vote history.
@@ -157,6 +171,7 @@ class AvalancheResponse {
     std::vector<AvalancheVote> votes;
 
 public:
+    AvalancheResponse() : round(-1), cooldown(-1) {}
     AvalancheResponse(uint64_t roundIn, uint32_t cooldownIn,
                       std::vector<AvalancheVote> votesIn)
         : round(roundIn), cooldown(cooldownIn), votes(votesIn) {}
@@ -233,8 +248,8 @@ public:
     }
 };
 
-typedef std::map<const CBlockIndex *, VoteRecord, CBlockIndexWorkComparator>
-    BlockVoteMap;
+using BlockVoteMap =
+    std::map<const CBlockIndex *, VoteRecord, CBlockIndexWorkComparator>;
 
 struct next_request_time {};
 struct query_timeout {};
@@ -254,16 +269,17 @@ private:
      */
     std::atomic<uint64_t> round;
 
-    typedef std::chrono::time_point<std::chrono::steady_clock> TimePoint;
+    using TimePoint = std::chrono::time_point<std::chrono::steady_clock>;
 
     struct Peer {
         NodeId nodeid;
         int64_t score;
 
         TimePoint nextRequestTime;
+        CPubKey pubkey;
     };
 
-    typedef boost::multi_index_container<
+    using PeerSet = boost::multi_index_container<
         Peer, boost::multi_index::indexed_by<
                   // index by nodeid
                   boost::multi_index::hashed_unique<
@@ -272,8 +288,7 @@ private:
                   boost::multi_index::ordered_non_unique<
                       boost::multi_index::tag<next_request_time>,
                       boost::multi_index::member<Peer, TimePoint,
-                                                 &Peer::nextRequestTime>>>>
-        PeerSet;
+                                                 &Peer::nextRequestTime>>>>;
 
     RWCollection<PeerSet> peerSet;
 
@@ -291,7 +306,7 @@ private:
         mutable std::vector<CInv> invs;
     };
 
-    typedef boost::multi_index_container<
+    using QuerySet = boost::multi_index_container<
         Query,
         boost::multi_index::indexed_by<
             // index by nodeid/round
@@ -304,27 +319,20 @@ private:
             // sorted by timeout
             boost::multi_index::ordered_non_unique<
                 boost::multi_index::tag<query_timeout>,
-                boost::multi_index::member<Query, TimePoint, &Query::timeout>>>>
-        QuerySet;
+                boost::multi_index::member<Query, TimePoint,
+                                           &Query::timeout>>>>;
 
     RWCollection<QuerySet> queries;
 
-    /**
-     * Start stop machinery.
-     */
-    std::atomic<bool> stopRequest;
-    bool running GUARDED_BY(cs_running);
+    /** The key used to sign responses. */
+    CKey sessionKey;
 
-    CWaitableCriticalSection cs_running;
-    std::condition_variable cond_running;
+    /** Event loop machinery. */
+    EventLoop eventLoop;
 
 public:
-    AvalancheProcessor(CConnman *connmanIn)
-        : connman(connmanIn),
-          queryTimeoutDuration(
-              AVALANCHE_DEFAULT_QUERY_TIMEOUT_DURATION_MILLISECONDS),
-          round(0), stopRequest(false), running(false) {}
-    ~AvalancheProcessor() { stopEventLoop(); }
+    AvalancheProcessor(CConnman *connmanIn);
+    ~AvalancheProcessor();
 
     void setQueryTimeoutDuration(std::chrono::milliseconds d) {
         queryTimeoutDuration = d;
@@ -334,10 +342,15 @@ public:
     bool isAccepted(const CBlockIndex *pindex) const;
     int getConfidence(const CBlockIndex *pindex) const;
 
+    void sendResponse(CNode *pfrom, AvalancheResponse response) const;
+
     bool registerVotes(NodeId nodeid, const AvalancheResponse &response,
                        std::vector<AvalancheBlockUpdate> &updates);
 
-    bool addPeer(NodeId nodeid, int64_t score);
+    bool addPeer(NodeId nodeid, int64_t score, CPubKey pubkey);
+    CPubKey getPubKey(NodeId nodeid) const;
+
+    CPubKey getSessionPubKey() const { return sessionKey.GetPubKey(); }
 
     bool startEventLoop(CScheduler &scheduler);
     bool stopEventLoop();
@@ -350,5 +363,10 @@ private:
 
     friend struct AvalancheTest;
 };
+
+/**
+ * Global avalanche instance.
+ */
+extern std::unique_ptr<AvalancheProcessor> g_avalanche;
 
 #endif // BITCOIN_AVALANCHE_H

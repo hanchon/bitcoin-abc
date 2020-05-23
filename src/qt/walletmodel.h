@@ -1,20 +1,28 @@
-// Copyright (c) 2011-2016 The Bitcoin Core developers
+// Copyright (c) 2011-2019 The Bitcoin Core developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 #ifndef BITCOIN_QT_WALLETMODEL_H
 #define BITCOIN_QT_WALLETMODEL_H
 
-#include "chainparams.h"
-#include "paymentrequestplus.h"
-#include "walletmodeltransaction.h"
+#include <chainparams.h>
+#include <interfaces/wallet.h>
 
-#include "support/allocators/secure.h"
+#if defined(HAVE_CONFIG_H)
+#include <config/bitcoin-config.h>
+#endif
 
-#include <map>
-#include <vector>
+#ifdef ENABLE_BIP70
+#include <qt/paymentrequestplus.h>
+#endif
+#include <qt/walletmodeltransaction.h>
+#include <support/allocators/secure.h>
 
 #include <QObject>
+
+#include <map>
+#include <memory>
+#include <vector>
 
 class AddressTableModel;
 class OptionsModel;
@@ -28,8 +36,10 @@ class CKeyID;
 class COutPoint;
 class COutput;
 class CPubKey;
-class CWallet;
-class uint256;
+
+namespace interfaces {
+class Node;
+} // namespace interfaces
 
 QT_BEGIN_NAMESPACE
 class QTimer;
@@ -57,8 +67,14 @@ public:
     // If from a payment request, this is used for storing the memo
     QString message;
 
+#ifdef ENABLE_BIP70
     // If from a payment request, paymentRequest.IsInitialized() will be true
     PaymentRequestPlus paymentRequest;
+#else
+    // If building with BIP70 is disabled, keep the payment request around as
+    // serialized string to ensure load/store is lossless
+    std::string sPaymentRequest;
+#endif
     // Empty if no authentication or invalid signature/cert/etc.
     QString authenticatedMerchant;
 
@@ -75,10 +91,12 @@ public:
         std::string sAddress = address.toStdString();
         std::string sLabel = label.toStdString();
         std::string sMessage = message.toStdString();
+#ifdef ENABLE_BIP70
         std::string sPaymentRequest;
         if (!ser_action.ForRead() && paymentRequest.IsInitialized()) {
             paymentRequest.SerializeToString(&sPaymentRequest);
         }
+#endif
 
         std::string sAuthenticatedMerchant =
             authenticatedMerchant.toStdString();
@@ -95,10 +113,12 @@ public:
             address = QString::fromStdString(sAddress);
             label = QString::fromStdString(sLabel);
             message = QString::fromStdString(sMessage);
+#ifdef ENABLE_BIP70
             if (!sPaymentRequest.empty()) {
                 paymentRequest.parse(QByteArray::fromRawData(
                     sPaymentRequest.data(), sPaymentRequest.size()));
             }
+#endif
 
             authenticatedMerchant =
                 QString::fromStdString(sAuthenticatedMerchant);
@@ -111,7 +131,9 @@ class WalletModel : public QObject {
     Q_OBJECT
 
 public:
-    explicit WalletModel(const PlatformStyle *platformStyle, CWallet *wallet,
+    explicit WalletModel(std::unique_ptr<interfaces::Wallet> wallet,
+                         interfaces::Node &node,
+                         const PlatformStyle *platformStyle,
                          OptionsModel *optionsModel, QObject *parent = nullptr);
     ~WalletModel();
 
@@ -144,15 +166,6 @@ public:
     TransactionTableModel *getTransactionTableModel();
     RecentRequestsTableModel *getRecentRequestsTableModel();
 
-    CWallet *getWallet() const { return wallet; };
-
-    Amount getBalance(const CCoinControl *coinControl = nullptr) const;
-    Amount getUnconfirmedBalance() const;
-    Amount getImmatureBalance() const;
-    bool haveWatchOnly() const;
-    Amount getWatchBalance() const;
-    Amount getWatchUnconfirmedBalance() const;
-    Amount getWatchImmatureBalance() const;
     EncryptionStatus getEncryptionStatus() const;
 
     // Check address for validity
@@ -181,8 +194,6 @@ public:
                          const SecureString &passPhrase = SecureString());
     bool changePassphrase(const SecureString &oldPass,
                           const SecureString &newPass);
-    // Wallet backup
-    bool backupWallet(const QString &filename);
 
     // RAI object for unlocking wallet, returned by requestUnlock()
     class UnlockContext {
@@ -210,40 +221,41 @@ public:
 
     UnlockContext requestUnlock();
 
-    bool getPubKey(const CKeyID &address, CPubKey &vchPubKeyOut) const;
-    bool IsSpendable(const CTxDestination &dest) const;
-    bool getPrivKey(const CKeyID &address, CKey &vchPrivKeyOut) const;
-    void getOutputs(const std::vector<COutPoint> &vOutpoints,
-                    std::vector<COutput> &vOutputs);
-    bool isSpent(const COutPoint &outpoint) const;
-    void listCoins(std::map<QString, std::vector<COutput>> &mapCoins) const;
-
-    bool isLockedCoin(const TxId &txid, uint32_t n) const;
-    void lockCoin(COutPoint &output);
-    void unlockCoin(COutPoint &output);
-    void listLockedCoins(std::vector<COutPoint> &vOutpts);
-
     void loadReceiveRequests(std::vector<std::string> &vReceiveRequests);
     bool saveReceiveRequest(const std::string &sAddress, const int64_t nId,
                             const std::string &sRequest);
 
-    bool transactionCanBeAbandoned(const TxId &txid) const;
-    bool abandonTransaction(const TxId &txid) const;
-
     static bool isWalletEnabled();
+    bool privateKeysDisabled() const;
+    bool canGetAddresses() const;
 
-    bool hdEnabled() const;
+    interfaces::Node &node() const { return m_node; }
+    interfaces::Wallet &wallet() const { return *m_wallet; }
 
     const CChainParams &getChainParams() const;
 
     QString getWalletName() const;
+    QString getDisplayName() const;
 
-    static bool isMultiwallet();
+    bool isMultiwallet();
+
+    AddressTableModel *getAddressTableModel() const {
+        return addressTableModel;
+    }
 
 private:
-    CWallet *wallet;
+    std::unique_ptr<interfaces::Wallet> m_wallet;
+    std::unique_ptr<interfaces::Handler> m_handler_unload;
+    std::unique_ptr<interfaces::Handler> m_handler_status_changed;
+    std::unique_ptr<interfaces::Handler> m_handler_address_book_changed;
+    std::unique_ptr<interfaces::Handler> m_handler_transaction_changed;
+    std::unique_ptr<interfaces::Handler> m_handler_show_progress;
+    std::unique_ptr<interfaces::Handler> m_handler_watch_only_changed;
+    std::unique_ptr<interfaces::Handler> m_handler_can_get_addrs_changed;
+    interfaces::Node &m_node;
+
     bool fHaveWatchOnly;
-    bool fForceCheckBalanceChanged;
+    bool fForceCheckBalanceChanged{false};
 
     // Wallet has an options model for wallet-specific options (transaction fee,
     // for example)
@@ -254,12 +266,7 @@ private:
     RecentRequestsTableModel *recentRequestsTableModel;
 
     // Cache some values to be able to detect changes
-    Amount cachedBalance;
-    Amount cachedUnconfirmedBalance;
-    Amount cachedImmatureBalance;
-    Amount cachedWatchOnlyBalance;
-    Amount cachedWatchUnconfBalance;
-    Amount cachedWatchImmatureBalance;
+    interfaces::WalletBalances m_cached_balances;
     EncryptionStatus cachedEncryptionStatus;
     int cachedNumBlocks;
 
@@ -267,15 +274,11 @@ private:
 
     void subscribeToCoreSignals();
     void unsubscribeFromCoreSignals();
-    void checkBalanceChanged();
+    void checkBalanceChanged(const interfaces::WalletBalances &new_balances);
 
 Q_SIGNALS:
     // Signal that balance in wallet changed
-    void balanceChanged(const Amount balance, const Amount unconfirmedBalance,
-                        const Amount immatureBalance,
-                        const Amount watchOnlyBalance,
-                        const Amount watchUnconfBalance,
-                        const Amount watchImmatureBalance);
+    void balanceChanged(const interfaces::WalletBalances &balances);
 
     // Encryption status of wallet changed
     void encryptionStatusChanged();
@@ -290,7 +293,7 @@ Q_SIGNALS:
                  unsigned int style);
 
     // Coins sent: from wallet, to recipient, in (serialized) transaction:
-    void coinsSent(CWallet *wallet, SendCoinsRecipient recipient,
+    void coinsSent(WalletModel *wallet, SendCoinsRecipient recipient,
                    QByteArray transaction);
 
     // Show progress dialog e.g. for rescan
@@ -298,6 +301,12 @@ Q_SIGNALS:
 
     // Watch-only address added
     void notifyWatchonlyChanged(bool fHaveWatchonly);
+
+    // Signal that wallet is about to be removed
+    void unload();
+
+    // Notify that there are now keys in the keypool
+    void canGetAddressesChanged();
 
 public Q_SLOTS:
     /** Wallet status might have changed. */

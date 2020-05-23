@@ -1,12 +1,12 @@
-// Copyright (c) 2018 The Bitcoin developers
+// Copyright (c) 2018-2019 The Bitcoin developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#include "rpc/jsonrpcrequest.h"
-#include "logging.h"
-#include "rpc/protocol.h"
-#include "tinyformat.h"
-#include "utilstrencodings.h"
+#include <logging.h>
+#include <rpc/jsonrpcrequest.h>
+#include <rpc/protocol.h>
+#include <tinyformat.h>
+#include <util/strencodings.h>
 
 #include <univalue.h>
 
@@ -29,10 +29,8 @@ void JSONRPCRequest::parse(const UniValue &valRequest) {
         throw JSONRPCError(RPC_INVALID_REQUEST, "Method must be a string");
     }
     strMethod = valMethod.get_str();
-    if (strMethod != "getblocktemplate") {
-        LogPrint(BCLog::RPC, "ThreadRPCServer method=%s\n",
-                 SanitizeString(strMethod));
-    }
+    LogPrint(BCLog::RPC, "ThreadRPCServer method=%s\n",
+             SanitizeString(strMethod));
 
     // Parse params
     UniValue valParams = find_value(request, "params");

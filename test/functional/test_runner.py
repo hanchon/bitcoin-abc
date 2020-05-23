@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright (c) 2014-2016 The Bitcoin Core developers
+# Copyright (c) 2014-2019 The Bitcoin Core developers
 # Copyright (c) 2017 The Bitcoin developers
 # Distributed under the MIT software license, see the accompanying
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
@@ -16,6 +16,7 @@ For a description of arguments recognized by test scripts, see
 """
 
 import argparse
+from collections import deque
 import configparser
 import datetime
 import os
@@ -33,7 +34,7 @@ import multiprocessing
 from queue import Queue, Empty
 
 # Formatting. Default colors to empty strings.
-BOLD, BLUE, RED, GREY = ("", ""), ("", ""), ("", ""), ("", "")
+BOLD, GREEN, RED, GREY = ("", ""), ("", ""), ("", ""), ("", "")
 try:
     # Make sure python thinks it can write unicode to its stdout
     "\u2713".encode("utf_8").decode(sys.stdout.encoding)
@@ -45,11 +46,29 @@ except UnicodeDecodeError:
     CROSS = "x "
     CIRCLE = "o "
 
-if os.name == 'posix':
+if os.name != 'nt' or sys.getwindowsversion() >= (10, 0, 14393):
+    if os.name == 'nt':
+        import ctypes
+        kernel32 = ctypes.windll.kernel32
+        ENABLE_VIRTUAL_TERMINAL_PROCESSING = 4
+        STD_OUTPUT_HANDLE = -11
+        STD_ERROR_HANDLE = -12
+        # Enable ascii color control to stdout
+        stdout = kernel32.GetStdHandle(STD_OUTPUT_HANDLE)
+        stdout_mode = ctypes.c_int32()
+        kernel32.GetConsoleMode(stdout, ctypes.byref(stdout_mode))
+        kernel32.SetConsoleMode(
+            stdout, stdout_mode.value | ENABLE_VIRTUAL_TERMINAL_PROCESSING)
+        # Enable ascii color control to stderr
+        stderr = kernel32.GetStdHandle(STD_ERROR_HANDLE)
+        stderr_mode = ctypes.c_int32()
+        kernel32.GetConsoleMode(stderr, ctypes.byref(stderr_mode))
+        kernel32.SetConsoleMode(
+            stderr, stderr_mode.value | ENABLE_VIRTUAL_TERMINAL_PROCESSING)
     # primitive formatting on supported
     # terminal via ANSI escape sequences:
     BOLD = ('\033[0m', '\033[1m')
-    BLUE = ('\033[0m', '\033[0;34m')
+    GREEN = ('\033[0m', '\033[0;32m')
     RED = ('\033[0m', '\033[0;31m')
     GREY = ('\033[0m', '\033[1;30m')
 
@@ -57,7 +76,8 @@ TEST_EXIT_PASSED = 0
 TEST_EXIT_SKIPPED = 77
 
 NON_SCRIPTS = [
-    # These are python files that live in the functional tests directory, but are not test scripts.
+    # These are python files that live in the functional tests directory, but
+    # are not test scripts.
     "combine_logs.py",
     "create_cache.py",
     "test_runner.py",
@@ -73,14 +93,17 @@ TEST_PARAMS = {
     #    testName
     #    testName --param1 --param2
     #    testname --param3
+    "rpc_deriveaddresses.py": [["--usecli"]],
     "wallet_txn_doublespend.py": [["--mineblock"]],
     "wallet_txn_clone.py": [["--mineblock"]],
+    "wallet_createwallet.py": [["--usecli"]],
     "wallet_multiwallet.py": [["--usecli"]],
 }
 
 # Used to limit the number of tests, when list of tests is not provided on command line
 # When --extended is specified, we run all tests, otherwise
-# we only run a test if its execution time in seconds does not exceed EXTENDED_CUTOFF
+# we only run a test if its execution time in seconds does not exceed
+# EXTENDED_CUTOFF
 DEFAULT_EXTENDED_CUTOFF = 40
 DEFAULT_JOBS = (multiprocessing.cpu_count() // 3) + 1
 
@@ -90,33 +113,38 @@ class TestCase():
     Data structure to hold and run information necessary to launch a test case.
     """
 
-    def __init__(self, test_num, test_case, tests_dir, tmpdir, flags=None):
+    def __init__(self, test_num, test_case, tests_dir,
+                 tmpdir, failfast_event, flags=None):
         self.tests_dir = tests_dir
         self.tmpdir = tmpdir
         self.test_case = test_case
         self.test_num = test_num
+        self.failfast_event = failfast_event
         self.flags = flags
 
     def run(self, portseed_offset):
-        t = self.test_case
+        if self.failfast_event.is_set():
+            return TestResult(self.test_num, self.test_case,
+                              "", "Skipped", 0, "", "")
+
         portseed = self.test_num + portseed_offset
         portseed_arg = ["--portseed={}".format(portseed)]
         log_stdout = tempfile.SpooledTemporaryFile(max_size=2**16)
         log_stderr = tempfile.SpooledTemporaryFile(max_size=2**16)
-        test_argv = t.split()
-        tmpdir = [os.path.join("--tmpdir={}", "{}_{}").format(
-                  self.tmpdir, re.sub(".py$", "", t), portseed)]
-        name = t
+        test_argv = self.test_case.split()
+        testdir = os.path.join("{}", "{}_{}").format(
+            self.tmpdir, re.sub(".py$", "", test_argv[0]), portseed)
+        tmpdir_arg = ["--tmpdir={}".format(testdir)]
         time0 = time.time()
-        process = subprocess.Popen([os.path.join(self.tests_dir, test_argv[0])] + test_argv[1:] + self.flags + portseed_arg + tmpdir,
+        process = subprocess.Popen([sys.executable, os.path.join(self.tests_dir, test_argv[0])] + test_argv[1:] + self.flags + portseed_arg + tmpdir_arg,
                                    universal_newlines=True,
                                    stdout=log_stdout,
                                    stderr=log_stderr)
 
         process.wait()
         log_stdout.seek(0), log_stderr.seek(0)
-        [stdout, stderr] = [l.read().decode('utf-8')
-                            for l in (log_stdout, log_stderr)]
+        [stdout, stderr] = [log.read().decode('utf-8')
+                            for log in (log_stdout, log_stderr)]
         log_stdout.close(), log_stderr.close()
         if process.returncode == TEST_EXIT_PASSED and stderr == "":
             status = "Passed"
@@ -125,11 +153,13 @@ class TestCase():
         else:
             status = "Failed"
 
-        return TestResult(name, status, int(time.time() - time0), stdout, stderr)
+        return TestResult(self.test_num, self.test_case, testdir, status,
+                          int(time.time() - time0), stdout, stderr)
 
 
 def on_ci():
-    return os.getenv('TRAVIS') == 'true' or os.getenv('TEAMCITY_VERSION') != None
+    return os.getenv('TRAVIS') == 'true' or os.getenv(
+        'TEAMCITY_VERSION') is not None
 
 
 def main():
@@ -137,7 +167,7 @@ def main():
     config = configparser.ConfigParser()
     configfile = os.path.join(os.path.abspath(
         os.path.dirname(__file__)), "..", "config.ini")
-    config.read_file(open(configfile))
+    config.read_file(open(configfile, encoding="utf8"))
 
     src_dir = config["environment"]["SRCDIR"]
     build_dir = config["environment"]["BUILDDIR"]
@@ -149,11 +179,13 @@ def main():
                                      description=__doc__,
                                      epilog='''
     Help text and arguments for individual test script:''',
-                                     formatter_class=argparse.RawTextHelpFormatter)
+                                     formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    parser.add_argument('--combinedlogslen', '-c', type=int, default=0,
+                        help='print a combined log (of length n lines) from all test nodes and test framework to the console on failure.')
     parser.add_argument('--coverage', action='store_true',
                         help='generate a basic coverage report for the RPC interface')
     parser.add_argument(
-        '--exclude', '-x', help='specify a comma-seperated-list of scripts to exclude. Do not include the .py extension in the name.')
+        '--exclude', '-x', help='specify a comma-separated-list of scripts to exclude.')
     parser.add_argument('--extended', action='store_true',
                         help='run the extended test suite in addition to the basic tests')
     parser.add_argument('--cutoff', type=int, default=DEFAULT_EXTENDED_CUTOFF,
@@ -163,36 +195,51 @@ def main():
     parser.add_argument('--help', '-h', '-?',
                         action='store_true', help='print help text and exit')
     parser.add_argument('--jobs', '-j', type=int, default=DEFAULT_JOBS,
-                        help='how many test scripts to run in parallel. Default=4.')
+                        help='how many test scripts to run in parallel.')
     parser.add_argument('--keepcache', '-k', action='store_true',
                         help='the default behavior is to flush the cache directory on startup. --keepcache retains the cache from the previous testrun.')
     parser.add_argument('--quiet', '-q', action='store_true',
                         help='only print results summary and failure logs')
     parser.add_argument('--tmpdirprefix', '-t',
-                        default=tempfile.gettempdir(), help="Root directory for datadirs")
-    parser.add_argument('--junitouput', '-ju',
-                        default=os.path.join(build_dir, 'junit_results.xml'), help="file that will store JUnit formated test results.")
-
+                        default=os.path.join(build_dir, 'test', 'tmp'), help="Root directory for datadirs")
+    parser.add_argument(
+        '--failfast',
+        action='store_true',
+        help='stop execution after the first test failure')
+    parser.add_argument('--junitoutput', '-J', default='junit_results.xml',
+                        help="File that will store JUnit formatted test results. If no absolute path is given it is treated as relative to the temporary directory.")
+    parser.add_argument('--testsuitename', '-n', default='Bitcoin ABC functional tests',
+                        help="Name of the test suite, as it will appear in the logs and in the JUnit report.")
     args, unknown_args = parser.parse_known_args()
 
-    # Create a set to store arguments and create the passon string
-    tests = set(arg for arg in unknown_args if arg[:2] != "--")
+    # args to be passed on always start with two dashes; tests are the
+    # remaining unknown args
+    tests = [arg for arg in unknown_args if arg[:2] != "--"]
     passon_args = [arg for arg in unknown_args if arg[:2] == "--"]
     passon_args.append("--configfile={}".format(configfile))
 
     # Set up logging
     logging_level = logging.INFO if args.quiet else logging.DEBUG
     logging.basicConfig(format='%(message)s', level=logging_level)
+    logging.info("Starting {}".format(args.testsuitename))
 
     # Create base test directory
-    tmpdir = os.path.join("{}", "bitcoin_test_runner_{:%Y%m%d_%H%M%S}").format(
+    tmpdir = os.path.join("{}", "test_runner_₿₵_🏃_{:%Y%m%d_%H%M%S}").format(
         args.tmpdirprefix, datetime.datetime.now())
+
+    # If we fixed the command-line and filename encoding issue on Windows,
+    # these two lines could be removed
+    if config["environment"]["EXEEXT"] == ".exe":
+        tmpdir = os.path.join("{}", "test_runner_{:%Y%m%d_%H%M%S}").format(
+            args.tmpdirprefix, datetime.datetime.now())
+
     os.makedirs(tmpdir)
 
     logging.debug("Temporary test directory at {}".format(tmpdir))
 
-    enable_wallet = config["components"].getboolean("ENABLE_WALLET")
-    enable_utils = config["components"].getboolean("ENABLE_UTILS")
+    if not os.path.isabs(args.junitoutput):
+        args.junitoutput = os.path.join(tmpdir, args.junitoutput)
+
     enable_bitcoind = config["components"].getboolean("ENABLE_BITCOIND")
 
     if config["environment"]["EXEEXT"] == ".exe" and not args.force:
@@ -202,11 +249,9 @@ def main():
             "Tests currently disabled on Windows by default. Use --force option to enable")
         sys.exit(0)
 
-    if not (enable_wallet and enable_utils and enable_bitcoind):
-        print(
-            "No functional tests to run. Wallet, utils, and bitcoind must all be enabled")
-        print(
-            "Rerun `configure` with -enable-wallet, -with-utils and -with-daemon and rerun make")
+    if not enable_bitcoind:
+        print("No functional tests to run.")
+        print("Rerun ./configure with --with-daemon and then make")
         sys.exit(0)
 
     # Build list of tests
@@ -214,7 +259,7 @@ def main():
 
     # Check all tests with parameters actually exist
     for test in TEST_PARAMS:
-        if not test in all_scripts:
+        if test not in all_scripts:
             print("ERROR: Test with parameter {} does not exist, check it has "
                   "not been renamed or deleted".format(test))
             sys.exit(1)
@@ -223,8 +268,15 @@ def main():
         # Individual tests have been specified. Run specified tests that exist
         # in the all_scripts list. Accept the name with or without .py
         # extension.
-        test_list = [t for t in all_scripts if
-                     (t in tests or re.sub(".py$", "", t) in tests)]
+        individual_tests = [
+            re.sub(r"\.py$", "", t) + ".py" for t in tests if not t.endswith('*')]
+        test_list = []
+        for t in individual_tests:
+            if t in all_scripts:
+                test_list.append(t)
+            else:
+                print("{}WARNING!{} Test '{}' not found in full test list.".format(
+                    BOLD[1], BOLD[0], t))
 
         # Allow for wildcard at the end of the name, so a single input can
         # match multiple tests
@@ -232,8 +284,6 @@ def main():
             if test.endswith('*'):
                 test_list.extend(
                     [t for t in all_scripts if t.startswith(test[:-1])])
-        # Make the list unique
-        test_list = list(set(test_list))
 
         # do not cut off explicitly specified tests
         cutoff = sys.maxsize
@@ -247,12 +297,17 @@ def main():
 
     # Remove the test cases that the user has explicitly asked to exclude.
     if args.exclude:
-        for exclude_test in args.exclude.split(','):
-            if exclude_test + ".py" in test_list:
-                test_list.remove(exclude_test + ".py")
+        tests_excl = [re.sub(r"\.py$", "", t)
+                      + (".py" if ".py" not in t else "") for t in args.exclude.split(',')]
+        for exclude_test in tests_excl:
+            if exclude_test in test_list:
+                test_list.remove(exclude_test)
+            else:
+                print("{}WARNING!{} Test '{}' not found in current test list.".format(
+                    BOLD[1], BOLD[0], exclude_test))
 
-    # Use and update timings from build_dir only if separate
-    # build directory is used. We do not want to pollute source directory.
+    # Update timings from build_dir only if separate build directory is used.
+    # We do not want to pollute source directory.
     build_timings = None
     if (src_dir != build_dir):
         build_timings = Timings(os.path.join(build_dir, 'timing.json'))
@@ -263,7 +318,7 @@ def main():
 
     # Add test parameters and remove long running tests if needed
     test_list = get_tests_to_run(
-        test_list, TEST_PARAMS, cutoff, src_timings, build_timings)
+        test_list, TEST_PARAMS, cutoff, src_timings)
 
     if not test_list:
         print("No valid test scripts specified. Check that your test is in one "
@@ -275,18 +330,35 @@ def main():
         # and exit.
         parser.print_help()
         subprocess.check_call(
-            [os.path.join(tests_dir, test_list[0]), '-h'])
+            [sys.executable, os.path.join(tests_dir, test_list[0]), '-h'])
         sys.exit(0)
+
+    check_script_prefixes(all_scripts)
 
     if not args.keepcache:
         shutil.rmtree(os.path.join(build_dir, "test",
                                    "cache"), ignore_errors=True)
 
-    run_tests(test_list, build_dir, tests_dir, args.junitouput,
-              config["environment"]["EXEEXT"], tmpdir, args.jobs, args.coverage, passon_args, build_timings)
+    run_tests(
+        test_list,
+        build_dir,
+        tests_dir,
+        args.junitoutput,
+        tmpdir,
+        num_jobs=args.jobs,
+        test_suite_name=args.testsuitename,
+        enable_coverage=args.coverage,
+        args=passon_args,
+        combined_logs_len=args.combinedlogslen,
+        build_timings=build_timings,
+        failfast=args.failfast
+    )
 
 
-def run_tests(test_list, build_dir, tests_dir, junitouput, exeext, tmpdir, num_jobs, enable_coverage=False, args=[], build_timings=None):
+def run_tests(test_list, build_dir, tests_dir, junitoutput, tmpdir, num_jobs, test_suite_name,
+              enable_coverage=False, args=None, combined_logs_len=0, build_timings=None, failfast=False):
+    args = args or []
+
     # Warn if bitcoind is already running (unix only)
     try:
         pidofOutput = subprocess.check_output(["pidof", "bitcoind"])
@@ -302,15 +374,7 @@ def run_tests(test_list, build_dir, tests_dir, junitouput, exeext, tmpdir, num_j
         print("{}WARNING!{} There is a cache directory here: {}. If tests fail unexpectedly, try deleting the cache directory.".format(
             BOLD[1], BOLD[0], cache_dir))
 
-    # Set env vars
-    if "BITCOIND" not in os.environ:
-        os.environ["BITCOIND"] = os.path.join(
-            build_dir, 'src', 'bitcoind' + exeext)
-        os.environ["BITCOINCLI"] = os.path.join(
-            build_dir, 'src', 'bitcoin-cli' + exeext)
-
-    flags = [os.path.join("--srcdir={}".format(build_dir), "src")] + args
-    flags.append("--cachedir={}".format(cache_dir))
+    flags = ['--cachedir={}'.format(cache_dir)] + args
 
     if enable_coverage:
         coverage = RPCCoverage()
@@ -323,44 +387,49 @@ def run_tests(test_list, build_dir, tests_dir, junitouput, exeext, tmpdir, num_j
     if len(test_list) > 1 and num_jobs > 1:
         # Populate cache
         try:
-            subprocess.check_output(
-                [os.path.join(tests_dir, 'create_cache.py')] + flags + [os.path.join("--tmpdir={}", "cache") .format(tmpdir)])
-        except Exception as e:
-            print(e.output)
-            raise e
+            subprocess.check_output([sys.executable, os.path.join(
+                tests_dir, 'create_cache.py')] + flags + [os.path.join("--tmpdir={}", "cache") .format(tmpdir)])
+        except subprocess.CalledProcessError as e:
+            sys.stdout.buffer.write(e.output)
+            raise
 
     # Run Tests
     time0 = time.time()
     test_results = execute_test_processes(
-        num_jobs, test_list, tests_dir, tmpdir, flags)
+        num_jobs, test_list, tests_dir, tmpdir, flags, failfast)
     runtime = int(time.time() - time0)
 
     max_len_name = len(max(test_list, key=len))
-    print_results(test_results, max_len_name, runtime)
-    save_results_as_junit(test_results, junitouput, runtime)
+    print_results(test_results, tests_dir, max_len_name,
+                  runtime, combined_logs_len)
+    save_results_as_junit(test_results, junitoutput, runtime, test_suite_name)
 
     if (build_timings is not None):
         build_timings.save_timings(test_results)
 
     if coverage:
-        coverage.report_rpc_coverage()
+        coverage_passed = coverage.report_rpc_coverage()
 
         logging.debug("Cleaning up coverage data")
         coverage.cleanup()
+    else:
+        coverage_passed = True
 
     # Clear up the temp directory if all subdirectories are gone
     if not os.listdir(tmpdir):
         os.rmdir(tmpdir)
 
-    all_passed = all(
-        map(lambda test_result: test_result.was_successful, test_results))
+    all_passed = all(map(
+        lambda test_result: test_result.was_successful, test_results)) and coverage_passed
 
     sys.exit(not all_passed)
 
 
-def execute_test_processes(num_jobs, test_list, tests_dir, tmpdir, flags):
+def execute_test_processes(
+        num_jobs, test_list, tests_dir, tmpdir, flags, failfast=False):
     update_queue = Queue()
     job_queue = Queue()
+    failfast_event = threading.Event()
     test_results = []
     poll_timeout = 10  # seconds
     # In case there is a graveyard of zombie bitcoinds, we can apply a
@@ -377,14 +446,14 @@ def execute_test_processes(num_jobs, test_list, tests_dir, tmpdir, flags):
         handle_message handles a single message from handle_test_cases
         """
         if isinstance(message, TestCase):
-            running_jobs.add(message.test_case)
+            running_jobs.append((message.test_num, message.test_case))
             print("{}{}{} started".format(BOLD[1], message.test_case, BOLD[0]))
             return
 
         if isinstance(message, TestResult):
             test_result = message
 
-            running_jobs.remove(test_result.name)
+            running_jobs.remove((test_result.num, test_result.name))
             test_results.append(test_result)
 
             if test_result.status == "Passed":
@@ -400,6 +469,10 @@ def execute_test_processes(num_jobs, test_list, tests_dir, tmpdir, flags):
                 print(test_result.stdout)
                 print(BOLD[1] + 'stderr:' + BOLD[0])
                 print(test_result.stderr)
+
+                if failfast:
+                    logging.debug("Early exiting after test failure")
+                    failfast_event.set()
             return
 
         assert False, "we should not be here"
@@ -410,7 +483,7 @@ def execute_test_processes(num_jobs, test_list, tests_dir, tmpdir, flags):
         update_queue.  It serializes the results so we can print nice status update messages.
         """
         printed_status = False
-        running_jobs = set()
+        running_jobs = []
 
         while True:
             message = None
@@ -427,16 +500,17 @@ def execute_test_processes(num_jobs, test_list, tests_dir, tmpdir, flags):
 
                 handle_message(message, running_jobs)
                 update_queue.task_done()
-            except Empty as e:
+            except Empty:
                 if not on_ci():
-                    print("Running jobs: {}".format(", ".join(running_jobs)), end="\r")
+                    print("Running jobs: {}".format(
+                        ", ".join([j[1] for j in running_jobs])), end="\r")
                     sys.stdout.flush()
                     printed_status = True
 
     def handle_test_cases():
         """
-        job_runner represents a single thread that is part of a worker pool.  
-        It waits for a test, then executes that test. 
+        job_runner represents a single thread that is part of a worker pool.
+        It waits for a test, then executes that test.
         It also reports start and result messages to handle_update_messages
         """
         while True:
@@ -455,19 +529,19 @@ def execute_test_processes(num_jobs, test_list, tests_dir, tmpdir, flags):
     ##
 
     # Start our result collection thread.
-    t = threading.Thread(target=handle_update_messages)
-    t.setDaemon(True)
-    t.start()
+    resultCollector = threading.Thread(target=handle_update_messages)
+    resultCollector.daemon = True
+    resultCollector.start()
 
     # Start some worker threads
     for j in range(num_jobs):
         t = threading.Thread(target=handle_test_cases)
-        t.setDaemon(True)
+        t.daemon = True
         t.start()
 
     # Push all our test cases into the job queue.
     for i, t in enumerate(test_list):
-        job_queue.put(TestCase(i, t, tests_dir, tmpdir, flags))
+        job_queue.put(TestCase(i, t, tests_dir, tmpdir, failfast_event, flags))
 
     # Wait for all the jobs to be completed
     job_queue.join()
@@ -483,11 +557,12 @@ def execute_test_processes(num_jobs, test_list, tests_dir, tmpdir, flags):
     return test_results
 
 
-def print_results(test_results, max_len_name, runtime):
+def print_results(test_results, tests_dir, max_len_name,
+                  runtime, combined_logs_len):
     results = "\n" + BOLD[1] + "{} | {} | {}\n\n".format(
         "TEST".ljust(max_len_name), "STATUS   ", "DURATION") + BOLD[0]
 
-    test_results.sort(key=lambda result: result.name.lower())
+    test_results.sort(key=TestResult.sort_key)
     all_passed = True
     time_sum = 0
 
@@ -497,9 +572,35 @@ def print_results(test_results, max_len_name, runtime):
         test_result.padding = max_len_name
         results += str(test_result)
 
+        testdir = test_result.testdir
+        if combined_logs_len and os.path.isdir(testdir):
+            # Print the final `combinedlogslen` lines of the combined logs
+            print('{}Combine the logs and print the last {} lines ...{}'.format(
+                BOLD[1], combined_logs_len, BOLD[0]))
+            print('\n============')
+            print('{}Combined log for {}:{}'.format(BOLD[1], testdir, BOLD[0]))
+            print('============\n')
+            combined_logs_args = [
+                sys.executable, os.path.join(
+                    tests_dir, 'combine_logs.py'), testdir]
+
+            if BOLD[0]:
+                combined_logs_args += ['--color']
+                combined_logs, _ = subprocess.Popen(
+                    combined_logs_args, universal_newlines=True, stdout=subprocess.PIPE).communicate()
+            print(
+                "\n".join(
+                    deque(
+                        combined_logs.splitlines(),
+                        combined_logs_len)))
+
     status = TICK + "Passed" if all_passed else CROSS + "Failed"
+    if not all_passed:
+        results += RED[1]
     results += BOLD[1] + "\n{} | {} | {} s (accumulated) \n".format(
         "ALL".ljust(max_len_name), status.ljust(9), time_sum) + BOLD[0]
+    if not all_passed:
+        results += RED[0]
     results += "Runtime: {} s\n".format(runtime)
     print(results)
 
@@ -509,17 +610,27 @@ class TestResult():
     Simple data structure to store test result values and print them properly
     """
 
-    def __init__(self, name, status, time, stdout, stderr):
+    def __init__(self, num, name, testdir, status, time, stdout, stderr):
+        self.num = num
         self.name = name
+        self.testdir = testdir
         self.status = status
         self.time = time
         self.padding = 0
         self.stdout = stdout
         self.stderr = stderr
 
+    def sort_key(self):
+        if self.status == "Passed":
+            return 0, self.name.lower()
+        elif self.status == "Failed":
+            return 2, self.name.lower()
+        elif self.status == "Skipped":
+            return 1, self.name.lower()
+
     def __repr__(self):
         if self.status == "Passed":
-            color = BLUE
+            color = GREEN
             glyph = TICK
         elif self.status == "Failed":
             color = RED
@@ -544,7 +655,38 @@ def get_all_scripts_from_disk(test_dir, non_scripts):
     return list(python_files - set(non_scripts))
 
 
-def get_tests_to_run(test_list, test_params, cutoff, src_timings, build_timings=None):
+def check_script_prefixes(all_scripts):
+    """Check that no more than `EXPECTED_VIOLATION_COUNT` of the
+       test scripts don't start with one of the allowed name prefixes."""
+    EXPECTED_VIOLATION_COUNT = 20
+
+    # LEEWAY is provided as a transition measure, so that pull-requests
+    # that introduce new tests that don't conform with the naming
+    # convention don't immediately cause the tests to fail.
+    LEEWAY = 0
+
+    good_prefixes_re = re.compile(
+        "(abc_)?(example|feature|interface|mempool|mining|p2p|rpc|wallet|tool)_")
+    bad_script_names = [
+        script for script in all_scripts if good_prefixes_re.match(script) is None]
+
+    if len(bad_script_names) < EXPECTED_VIOLATION_COUNT:
+        print(
+            "{}HURRAY!{} Number of functional tests violating naming convention reduced!".format(
+                BOLD[1],
+                BOLD[0]))
+        print("Consider reducing EXPECTED_VIOLATION_COUNT from {} to {}".format(
+            EXPECTED_VIOLATION_COUNT, len(bad_script_names)))
+    elif len(bad_script_names) > EXPECTED_VIOLATION_COUNT:
+        print(
+            "INFO: {} tests not meeting naming conventions (expected {}):".format(len(bad_script_names), EXPECTED_VIOLATION_COUNT))
+        print("  {}".format("\n  ".join(sorted(bad_script_names))))
+        assert len(bad_script_names) <= EXPECTED_VIOLATION_COUNT + \
+            LEEWAY, "Too many tests not following naming convention! ({} found, expected: <= {})".format(
+                len(bad_script_names), EXPECTED_VIOLATION_COUNT)
+
+
+def get_tests_to_run(test_list, test_params, cutoff, src_timings):
     """
     Returns only test that will not run longer that cutoff.
     Long running tests are returned first to favor running tests in parallel
@@ -552,17 +694,12 @@ def get_tests_to_run(test_list, test_params, cutoff, src_timings, build_timings=
     """
 
     def get_test_time(test):
-        if build_timings is not None:
-            timing = next(
-                (x['time'] for x in build_timings.existing_timings if x['name'] == test), None)
-            if timing is not None:
-                return timing
-
-        # try source directory. Return 0 if test is unknown to always run it
+        # Return 0 if test is unknown to always run it
         return next(
             (x['time'] for x in src_timings.existing_timings if x['name'] == test), 0)
 
-    # Some tests must also be run with additional parameters. Add them to the list.
+    # Some tests must also be run with additional parameters. Add them to the
+    # list.
     tests_with_params = []
     for test_name in test_list:
         # always execute a test without parameters
@@ -573,7 +710,7 @@ def get_tests_to_run(test_list, test_params, cutoff, src_timings, build_timings=
                 [test_name + " " + " ".join(p) for p in params])
 
     result = [t for t in tests_with_params if get_test_time(t) <= cutoff]
-    result.sort(key=lambda x:  (-get_test_time(x), x))
+    result.sort(key=lambda x: (-get_test_time(x), x))
     return result
 
 
@@ -607,8 +744,10 @@ class RPCCoverage():
         if uncovered:
             print("Uncovered RPC commands:")
             print("".join(("  - {}\n".format(i)) for i in sorted(uncovered)))
+            return False
         else:
             print("All RPC commands covered.")
+            return True
 
     def cleanup(self):
         return shutil.rmtree(self.dir)
@@ -630,7 +769,7 @@ class RPCCoverage():
         if not os.path.isfile(coverage_ref_filename):
             raise RuntimeError("No coverage reference found")
 
-        with open(coverage_ref_filename, 'r') as f:
+        with open(coverage_ref_filename, 'r', encoding="utf8") as f:
             all_cmds.update([i.strip() for i in f.readlines()])
 
         for root, dirs, files in os.walk(self.dir):
@@ -639,20 +778,20 @@ class RPCCoverage():
                     coverage_filenames.add(os.path.join(root, filename))
 
         for filename in coverage_filenames:
-            with open(filename, 'r') as f:
+            with open(filename, 'r', encoding="utf8") as f:
                 covered_cmds.update([i.strip() for i in f.readlines()])
 
         return all_cmds - covered_cmds
 
 
-def save_results_as_junit(test_results, file_name, time):
+def save_results_as_junit(test_results, file_name, time, test_suite_name):
     """
     Save tests results to file in JUnit format
 
     See http://llg.cubic.org/docs/junit/ for specification of format
     """
     e_test_suite = ET.Element("testsuite",
-                              {"name": "bitcoin_abc_tests",
+                              {"name": "{}".format(test_suite_name),
                                "tests": str(len(test_results)),
                                # "errors":
                                "failures": str(len([t for t in test_results if t.status == "Failed"])),
@@ -693,7 +832,7 @@ class Timings():
 
     def load_timings(self):
         if os.path.isfile(self.timing_file):
-            with open(self.timing_file) as f:
+            with open(self.timing_file, encoding="utf8") as f:
                 return json.load(f)
         else:
             return []
@@ -721,11 +860,11 @@ class Timings():
         # we only save test that have passed - timings for failed test might be
         # wrong (timeouts or early fails)
         passed_results = [t for t in test_results if t.status == 'Passed']
-        new_timings = list(map(lambda t: {'name':  t.name, 'time': t.time},
+        new_timings = list(map(lambda t: {'name': t.name, 'time': t.time},
                                passed_results))
         merged_timings = self.get_merged_timings(new_timings)
 
-        with open(self.timing_file, 'w') as f:
+        with open(self.timing_file, 'w', encoding="utf8") as f:
             json.dump(merged_timings, f, indent=True)
 
 

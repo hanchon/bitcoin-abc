@@ -5,18 +5,15 @@
 #ifndef BITCOIN_PREVECTOR_H
 #define BITCOIN_PREVECTOR_H
 
+#include <algorithm>
 #include <cassert>
+#include <cstddef>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
-
-#include <cstddef>
 #include <iterator>
 #include <type_traits>
 
-#include <compat.h>
-
-#pragma pack(push, 1)
 /**
  * Implements a drop-in replacement for std::vector<T> which stores up to N
  * elements directly (without heap allocation). The types Size and Diff are used
@@ -234,14 +231,25 @@ public:
     };
 
 private:
-    size_type _size;
+#pragma pack(push, 1)
     union direct_or_indirect {
         char direct[sizeof(T) * N];
         struct {
-            size_type capacity;
             char *indirect;
+            size_type capacity;
         };
-    } _union;
+    };
+#pragma pack(pop)
+    alignas(char *) direct_or_indirect _union = {};
+    size_type _size = 0;
+
+    static_assert(alignof(char *) % alignof(size_type) == 0 &&
+                      sizeof(char *) % alignof(size_type) == 0,
+                  "size_type cannot have more restrictive alignment "
+                  "requirement than pointer");
+    static_assert(alignof(char *) % alignof(T) == 0,
+                  "value_type T cannot have more restrictive alignment "
+                  "requirement than pointer");
 
     T *direct_ptr(difference_type pos) {
         return reinterpret_cast<T *>(_union.direct) + pos;
@@ -299,23 +307,8 @@ private:
         return is_direct() ? direct_ptr(pos) : indirect_ptr(pos);
     }
 
-    void fill(T *dst, ptrdiff_t count) {
-        if (IS_TRIVIALLY_CONSTRUCTIBLE<T>::value) {
-            // The most common use of prevector is where T=uint8_t. For
-            // trivially constructible types, we can use memset() to avoid
-            // looping.
-            ::memset(dst, 0, count * sizeof(T));
-        } else {
-            for (auto i = 0; i < count; ++i) {
-                new (static_cast<void *>(dst + i)) T();
-            }
-        }
-    }
-
-    void fill(T *dst, ptrdiff_t count, const T &value) {
-        for (auto i = 0; i < count; ++i) {
-            new (static_cast<void *>(dst + i)) T(value);
-        }
+    void fill(T *dst, ptrdiff_t count, const T &value = T{}) {
+        std::fill_n(dst, count, value);
     }
 
     template <typename InputIterator>
@@ -348,34 +341,32 @@ public:
         fill(item_ptr(0), first, last);
     }
 
-    prevector() : _size(0), _union{{}} {}
+    prevector() {}
 
-    explicit prevector(size_type n) : prevector() { resize(n); }
+    explicit prevector(size_type n) { resize(n); }
 
-    explicit prevector(size_type n, const T &val) : prevector() {
+    explicit prevector(size_type n, const T &val) {
         change_capacity(n);
         _size += n;
         fill(item_ptr(0), n, val);
     }
 
     template <typename InputIterator>
-    prevector(InputIterator first, InputIterator last) : prevector() {
+    prevector(InputIterator first, InputIterator last) {
         size_type n = last - first;
         change_capacity(n);
         _size += n;
         fill(item_ptr(0), first, last);
     }
 
-    prevector(const prevector<N, T, Size, Diff> &other) : prevector() {
+    prevector(const prevector<N, T, Size, Diff> &other) {
         size_type n = other.size();
         change_capacity(n);
         _size += n;
         fill(item_ptr(0), other.begin(), other.end());
     }
 
-    prevector(prevector<N, T, Size, Diff> &&other) : prevector() {
-        swap(other);
-    }
+    prevector(prevector<N, T, Size, Diff> &&other) { swap(other); }
 
     prevector &operator=(const prevector<N, T, Size, Diff> &other) {
         if (&other == this) {
@@ -600,6 +591,5 @@ public:
 
     const value_type *data() const { return item_ptr(0); }
 };
-#pragma pack(pop)
 
 #endif // BITCOIN_PREVECTOR_H

@@ -1,4 +1,4 @@
-// Copyright (c) 2018 The Bitcoin developers
+// Copyright (c) 2018-2019 The Bitcoin developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
@@ -107,7 +107,7 @@ public:
     }
 
     /**
-     * Construct a new RCUPtr without transfering owership.
+     * Construct a new RCUPtr without transferring owership.
      */
     static RCUPtr copy(T *ptr) {
         if (ptr != nullptr) {

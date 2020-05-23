@@ -2,16 +2,15 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file. See the AUTHORS file for names of contributors.
 
-cmake_minimum_required(VERSION 3.5)
+cmake_minimum_required(VERSION 3.13)
 project(Leveldb VERSION 0.1.0 LANGUAGES C CXX)
 
 # This project can take advantage of C++11.
 set(CMAKE_CXX_STANDARD 11)
 
 # Remove some warnings for leveldb as they can get noisy.
-add_compiler_flag(-Wno-sign-compare -Wno-implicit-fallthrough)
-add_c_compiler_flag(-Wno-strict-prototypes)
-remove_compiler_flags(-Wstrict-prototypes)
+add_compiler_flags(-Wno-sign-compare -Wno-implicit-fallthrough)
+add_c_compiler_flags(-Wno-strict-prototypes)
 
 include(CheckIncludeFileCXX)
 check_include_file_cxx("atomic" LEVELDB_ATOMIC_PRESENT)
@@ -83,8 +82,16 @@ if(${CMAKE_SYSTEM_NAME} MATCHES "Windows")
 	)
 
 	find_package(SHLWAPI REQUIRED)
-	target_link_libraries(leveldb ${SHLWAPI_LIBRARY})
-	target_include_directories(leveldb PUBLIC ${SHLWAPI_INCLUDE_DIR})
+	# We cannot use the imported target here, because cmake will introduce an
+	# -isystem compilation directive and cause the build to fail with MinGw.
+	# This comes from a couple cmake bugs:
+	#  - https://gitlab.kitware.com/cmake/cmake/issues/16291
+	#  - https://gitlab.kitware.com/cmake/cmake/issues/19095
+	# These issues are solved from cmake 3.14.1. Once this version is enforced,
+	# the following can be used:
+	# target_link_libraries(leveldb SHLWAPI::shlwapi)
+	target_link_libraries(leveldb ${SHLWAPI_LIBRARIES})
+	target_include_directories(leveldb PUBLIC ${SHLWAPI_INCLUDE_DIRS})
 else()
 	set(LEVELDB_PLATFORM POSIX)
 	target_sources(leveldb PRIVATE port/port_posix.cc)
@@ -101,6 +108,8 @@ else()
 		set(LEVELDB_OS SOLARIS)
 	elseif(${CMAKE_SYSTEM_NAME} MATCHES "FreeBSD")
 		set(LEVELDB_OS FREEBSD)
+	elseif(${CMAKE_SYSTEM_NAME} MATCHES "KFreeBSD")
+		set(LEVELDB_OS KFREEBSD)
 	elseif(${CMAKE_SYSTEM_NAME} MATCHES "NetBSD")
 		set(LEVELDB_OS NETBSD)
 	elseif(${CMAKE_SYSTEM_NAME} MATCHES "OpenBSD")
@@ -116,8 +125,7 @@ else()
 		# No idea what's the proper system name is here.
 		set(LEVELDB_OS IOS)
 	else()
-		# Unknown plateform, assume linux.
-		set(LEVELDB_OS LINUX)
+		message(FATAL_ERROR "Cannot build leveldb for ${CMAKE_SYSTEM_NAME}. Please file a bug report.")
 	endif()
 endif()
 

@@ -1,9 +1,9 @@
-// Copyright (c) 2012-2017 The Bitcoin Core developers
+// Copyright (c) 2012-2019 The Bitcoin Core developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 #include <sync.h>
-#include <test/test_bitcoin.h>
+#include <test/setup_common.h>
 
 #include <boost/test/unit_test.hpp>
 
@@ -34,10 +34,10 @@ BOOST_AUTO_TEST_CASE(potential_deadlock_detected) {
     g_debug_lockorder_abort = false;
 #endif
 
-    CCriticalSection rmutex1, rmutex2;
+    RecursiveMutex rmutex1, rmutex2;
     TestPotentialDeadLockDetected(rmutex1, rmutex2);
 
-    CWaitableCriticalSection mutex1, mutex2;
+    Mutex mutex1, mutex2;
     TestPotentialDeadLockDetected(mutex1, mutex2);
 
 #ifdef DEBUG_LOCKORDER

@@ -23,7 +23,8 @@ import sys
 
 def main():
     config = configparser.ConfigParser()
-    config.read_file(open(os.path.dirname(__file__) + "/../config.ini"))
+    config.read_file(open(os.path.join(os.path.dirname(
+        __file__), "../config.ini"), encoding="utf8"))
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('-v', '--verbose', action='store_true')
@@ -38,14 +39,14 @@ def main():
     # Add the format/level to the logger
     logging.basicConfig(format=formatter, level=level)
 
-    bctester(config["environment"]["SRCDIR"] + "/test/util/data",
-             "bitcoin-util-test.json", config["environment"])
+    bctester(os.path.join(config["environment"]["SRCDIR"], "test",
+                          "util", "data"), "bitcoin-util-test.json", config["environment"])
 
 
 def bctester(testDir, input_basename, buildenv):
     """ Loads and parses the input file, runs all tests and reports results"""
-    input_filename = testDir + "/" + input_basename
-    raw_data = open(input_filename).read()
+    input_filename = os.path.join(testDir, input_basename)
+    raw_data = open(input_filename, encoding="utf8").read()
     input_data = json.loads(raw_data)
 
     failed_testcases = []
@@ -53,10 +54,11 @@ def bctester(testDir, input_basename, buildenv):
     for testObj in input_data:
         try:
             bctest(testDir, testObj, buildenv)
-            logging.info("PASSED: " + testObj["description"])
-        except:
+        except Exception:
             logging.info("FAILED: " + testObj["description"])
             failed_testcases.append(testObj["description"])
+        else:
+            logging.info("PASSED: " + testObj["description"])
 
     if failed_testcases:
         error_message = "FAILED_TESTCASES:\n"
@@ -74,33 +76,41 @@ def bctest(testDir, testObj, buildenv):
     are not as expected. Error is caught by bctester() and reported.
     """
     # Get the exec names and arguments
-    execprog = buildenv["BUILDDIR"] + "/src/" + \
-        testObj['exec'] + buildenv["EXEEXT"]
+    execprog = os.path.join(
+        buildenv["BUILDDIR"], "src", testObj["exec"] + buildenv["EXEEXT"])
     execargs = testObj['args']
     execrun = [execprog] + execargs
+    if buildenv["EMULATOR"]:
+        execrun = [buildenv["EMULATOR"]] + execrun
 
     # Read the input data (if there is any)
     stdinCfg = None
     inputData = None
     if "input" in testObj:
-        filename = testDir + "/" + testObj['input']
-        inputData = open(filename).read()
+        filename = os.path.join(testDir, testObj["input"])
+        inputData = open(filename, encoding="utf8").read()
         stdinCfg = subprocess.PIPE
 
     # Read the expected output data (if there is any)
     outputFn = None
     outputData = None
+    outputType = None
     if "output_cmp" in testObj:
         outputFn = testObj['output_cmp']
         # output type from file extension (determines how to compare)
         outputType = os.path.splitext(outputFn)[1][1:]
         try:
-            outputData = open(testDir + "/" + outputFn).read()
-        except:
+            outputData = open(os.path.join(testDir, outputFn),
+                              encoding="utf8").read()
+        except OSError:
             logging.error("Output file " + outputFn + " can not be opened")
             raise
         if not outputData:
             logging.error("Output data missing for " + outputFn)
+            raise Exception
+        if not outputType:
+            logging.error(
+                "Output file {} does not have a file extension".format(outputFn))
             raise Exception
 
     # Run the test

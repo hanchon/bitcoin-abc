@@ -1,19 +1,20 @@
-// Copyright (c) 2012-2016 The Bitcoin Core developers
+// Copyright (c) 2012-2019 The Bitcoin Core developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#include "arith_uint256.h"
-#include "consensus/merkle.h"
-#include "merkleblock.h"
-#include "serialize.h"
-#include "streams.h"
-#include "test/test_bitcoin.h"
-#include "uint256.h"
-#include "version.h"
+#include <arith_uint256.h>
+#include <consensus/merkle.h>
+#include <merkleblock.h>
+#include <serialize.h>
+#include <streams.h>
+#include <uint256.h>
+#include <version.h>
 
-#include <vector>
+#include <test/setup_common.h>
 
 #include <boost/test/unit_test.hpp>
+
+#include <vector>
 
 class CPartialMerkleTreeTester : public CPartialMerkleTree {
 public:
@@ -48,8 +49,9 @@ BOOST_AUTO_TEST_CASE(pmt_test1) {
         // calculate actual merkle root and height
         uint256 merkleRoot1 = BlockMerkleRoot(block);
         std::vector<uint256> vTxid(nTx, uint256());
-        for (unsigned int j = 0; j < nTx; j++)
+        for (unsigned int j = 0; j < nTx; j++) {
             vTxid[j] = block.vtx[j]->GetId();
+        }
         int nHeight = 1, nTx_ = nTx;
         while (nTx_ > 1) {
             nTx_ = (nTx_ + 1) / 2;
@@ -65,7 +67,9 @@ BOOST_AUTO_TEST_CASE(pmt_test1) {
             for (unsigned int j = 0; j < nTx; j++) {
                 bool fInclude = InsecureRandBits(att / 2) == 0;
                 vMatch[j] = fInclude;
-                if (fInclude) vMatchTxid1.push_back(vTxid[j]);
+                if (fInclude) {
+                    vMatchTxid1.push_back(vTxid[j]);
+                }
             }
 
             // build the partial merkle tree
@@ -86,7 +90,7 @@ BOOST_AUTO_TEST_CASE(pmt_test1) {
 
             // extract merkle root and matched txids from copy
             std::vector<uint256> vMatchTxid2;
-            std::vector<unsigned int> vIndex;
+            std::vector<size_t> vIndex;
             uint256 merkleRoot2 = pmt2.ExtractMatches(vMatchTxid2, vIndex);
 
             // check that it has the same merkle root as the original, and a
@@ -120,7 +124,7 @@ BOOST_AUTO_TEST_CASE(pmt_malleability) {
                                 false, false, false, true,  true,  false};
 
     CPartialMerkleTree tree(vTxid, vMatch);
-    std::vector<unsigned int> vIndex;
+    std::vector<size_t> vIndex;
     BOOST_CHECK(tree.ExtractMatches(vTxid, vIndex).IsNull());
 }
 

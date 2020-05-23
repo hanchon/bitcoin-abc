@@ -13,33 +13,30 @@ class EstimateFeeTest(BitcoinTestFramework):
     def set_test_params(self):
         self.setup_clean_chain = True
         self.num_nodes = 3
-        self.extra_args = [[], ["-minrelaytxfee=0.001"],
-                           ["-deprecatedrpc=estimatefee"]]
+        self.extra_args = [[], ["-minrelaytxfee=0.001"], ["-mintxfee=0.00002"]]
+
+    def skip_test_if_missing_module(self):
+        self.skip_if_no_wallet()
 
     def run_test(self):
         default_node = self.nodes[0]
         diff_relay_fee_node = self.nodes[1]
-        deprecated_node = self.nodes[2]
+        diff_tx_fee_node = self.nodes[2]
         for i in range(5):
             self.nodes[0].generate(1)
 
             # estimatefee is 0.00001 by default, regardless of block contents
             assert_equal(default_node.estimatefee(), Decimal('0.00001'))
-            assert_equal(deprecated_node.estimatefee(), Decimal('0.00001'))
 
-            # estimatefee may be different for nodes that set it in their config
+            # estimatefee may be different for nodes that set it in their
+            # config
             assert_equal(diff_relay_fee_node.estimatefee(), Decimal('0.001'))
 
-        # nblocks arg is no longer supported. Make sure the error message
-        # indicates this.
-        assert_raises_rpc_error(-32, "estimatefee with the nblocks argument is no longer supported",
-                                default_node.estimatefee, 1)
-
-        # When marked as deprecated, estimatfee with nblocks set succeeds
-        assert_equal(deprecated_node.estimatefee(1), Decimal('0.00001'))
-        # Also test named arguments
-        assert_equal(deprecated_node.estimatefee(
-            nblocks=1), Decimal('0.00001'))
+            # Check the reasonableness of settxfee
+            assert_raises_rpc_error(-8, "txfee cannot be less than min relay tx fee",
+                                    diff_tx_fee_node.settxfee, Decimal('0.000005'))
+            assert_raises_rpc_error(-8, "txfee cannot be less than wallet min fee",
+                                    diff_tx_fee_node.settxfee, Decimal('0.000015'))
 
 
 if __name__ == '__main__':

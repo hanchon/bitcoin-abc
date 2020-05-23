@@ -16,11 +16,9 @@
 #ifndef BITCOIN_BASE58_H
 #define BITCOIN_BASE58_H
 
-#include "chainparams.h"
-#include "key.h"
-#include "pubkey.h"
-#include "script/standard.h"
-#include "support/allocators/zeroafterfree.h"
+#include <attributes.h>
+#include <support/allocators/zeroafterfree.h>
+#include <pubkey.h>
 
 #include <string>
 #include <vector>
@@ -41,13 +39,14 @@ std::string EncodeBase58(const std::vector<uint8_t> &vch);
  * return true if decoding is successful.
  * psz cannot be nullptr.
  */
-bool DecodeBase58(const char *psz, std::vector<uint8_t> &vchRet);
+NODISCARD bool DecodeBase58(const char *psz, std::vector<uint8_t> &vchRet);
 
 /**
  * Decode a base58-encoded string (str) into a byte vector (vchRet).
  * return true if decoding is successful.
  */
-bool DecodeBase58(const std::string &str, std::vector<uint8_t> &vchRet);
+NODISCARD bool DecodeBase58(const std::string &str,
+                            std::vector<uint8_t> &vchRet);
 
 /**
  * Encode a byte vector into a base58-encoded string, including checksum
@@ -58,7 +57,7 @@ std::string EncodeBase58Check(const std::vector<uint8_t> &vchIn);
  * Decode a base58-encoded string (psz) that includes a checksum into a byte
  * vector (vchRet), return true if decoding is successful
  */
-inline bool DecodeBase58Check(const char *psz, std::vector<uint8_t> &vchRet);
+NODISCARD bool DecodeBase58Check(const char *psz, std::vector<uint8_t> &vchRet);
 
 /**
  * Decode a base58-encoded string (str) that includes a checksum into a byte
@@ -66,6 +65,10 @@ inline bool DecodeBase58Check(const char *psz, std::vector<uint8_t> &vchRet);
  */
 inline bool DecodeBase58Check(const std::string &str,
                               std::vector<uint8_t> &vchRet);
+
+// TODO(GUILLE): Check this function
+// NODISCARD bool DecodeBase58Check(const std::string &str,
+//                                  std::vector<uint8_t> &vchRet);
 
 /**
  * Base class for all base58-encoded data

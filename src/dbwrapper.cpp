@@ -2,19 +2,20 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#include "dbwrapper.h"
+#include <dbwrapper.h>
 
-#include "random.h"
-#include "util.h"
+#include <fs.h>
+#include <random.h>
+#include <util/system.h>
 
-#include <boost/filesystem.hpp>
-
-#include <algorithm>
-#include <cstdint>
 #include <leveldb/cache.h>
 #include <leveldb/env.h>
 #include <leveldb/filter_policy.h>
 #include <memenv.h>
+
+#include <algorithm>
+#include <cstdint>
+#include <memory>
 
 class CBitcoinLevelDBLogger : public leveldb::Logger {
 public:
@@ -65,7 +66,7 @@ public:
 
             assert(p <= limit);
             base[std::min(bufsize - 1, (int)(p - base))] = '\0';
-            LogPrintf("leveldb: %s", base);
+            LogPrintfToBeContinued("leveldb: %s", base);
             if (base != buffer) {
                 delete[] base;
             }
@@ -74,13 +75,39 @@ public:
     }
 };
 
+
+static void SetMaxOpenFiles(leveldb::Options *options) {
+    // On most platforms the default setting of max_open_files (which is 1000)
+    // is optimal. On Windows using a large file count is OK because the handles
+    // do not interfere with select() loops. On 64-bit Unix hosts this value is
+    // also OK, because up to that amount LevelDB will use an mmap
+    // implementation that does not use extra file descriptors (the fds are
+    // closed after being mmaped).
+    //
+    // Increasing the value beyond the default is dangerous because LevelDB will
+    // fall back to a non-mmap implementation when the file count is too large.
+    // On 32-bit Unix host we should decrease the value because the handles use
+    // up real fds, and we want to avoid fd exhaustion issues.
+    //
+    // See PR #12495 for further discussion.
+
+    int default_open_files = options->max_open_files;
+#ifndef WIN32
+    if (sizeof(void *) < 8) {
+        options->max_open_files = 64;
+    }
+#endif
+    LogPrint(BCLog::LEVELDB, "LevelDB using max_open_files=%d (default=%d)\n",
+             options->max_open_files, default_open_files);
+}
+
 static leveldb::Options GetOptions(size_t nCacheSize, bool compression, int maxOpenFiles) {
     leveldb::Options options;
     options.block_cache = leveldb::NewLRUCache(nCacheSize / 2);
     // up to two write buffers may be held in memory simultaneously
     options.write_buffer_size = nCacheSize / 4;
     options.filter_policy = leveldb::NewBloomFilterPolicy(10);
-    options.compression = compression ? leveldb::kSnappyCompression : leveldb::kNoCompression;
+    options.compression = leveldb::kNoCompression;
     options.max_open_files = maxOpenFiles;
     options.info_log = new CBitcoinLevelDBLogger();
 
@@ -90,12 +117,17 @@ static leveldb::Options GetOptions(size_t nCacheSize, bool compression, int maxO
         // Only trigger error on corruption in later versions.
         options.paranoid_checks = true;
     }
+    SetMaxOpenFiles(&options);
     return options;
 }
 
-CDBWrapper::CDBWrapper(const boost::filesystem::path &path, size_t nCacheSize,
+// CDBWrapper::CDBWrapper(const boost::filesystem::path &path, size_t nCacheSize,
+//                        bool fMemory, bool fWipe, bool obfuscate,
+//                        bool compression, int maxOpenFiles) {
+
+CDBWrapper::CDBWrapper(const fs::path &path, size_t nCacheSize,
                        bool fMemory, bool fWipe, bool obfuscate,
-                       bool compression, int maxOpenFiles) {
+                       bool compression, int maxOpenFiles): m_name(fs::basename(path) {
     penv = nullptr;
     readoptions.verify_checksums = true;
     iteroptions.verify_checksums = true;
@@ -161,10 +193,32 @@ CDBWrapper::~CDBWrapper() {
 }
 
 bool CDBWrapper::WriteBatch(CDBBatch &batch, bool fSync) {
+    const bool log_memory = LogAcceptCategory(BCLog::LEVELDB);
+    double mem_before = 0;
+    if (log_memory) {
+        mem_before = DynamicMemoryUsage() / 1024.0 / 1024;
+    }
     leveldb::Status status =
         pdb->Write(fSync ? syncoptions : writeoptions, &batch.batch);
     dbwrapper_private::HandleError(status);
+    if (log_memory) {
+        double mem_after = DynamicMemoryUsage() / 1024.0 / 1024;
+        LogPrint(
+            BCLog::LEVELDB,
+            "WriteBatch memory usage: db=%s, before=%.1fMiB, after=%.1fMiB\n",
+            m_name, mem_before, mem_after);
+    }
     return true;
+}
+
+size_t CDBWrapper::DynamicMemoryUsage() const {
+    std::string memory;
+    if (!pdb->GetProperty("leveldb.approximate-memory-usage", &memory)) {
+        LogPrint(BCLog::LEVELDB,
+                 "Failed to get approximate-memory-usage property\n");
+        return 0;
+    }
+    return stoul(memory);
 }
 
 // Prefixed with null character to avoid collisions with other keys
@@ -210,17 +264,11 @@ void HandleError(const leveldb::Status &status) {
     if (status.ok()) {
         return;
     }
-    LogPrintf("%s\n", status.ToString());
-    if (status.IsCorruption()) {
-        throw dbwrapper_error("Database corrupted");
-    }
-    if (status.IsIOError()) {
-        throw dbwrapper_error("Database I/O error");
-    }
-    if (status.IsNotFound()) {
-        throw dbwrapper_error("Database entry missing");
-    }
-    throw dbwrapper_error("Unknown database error");
+    const std::string errmsg = "Fatal LevelDB error: " + status.ToString();
+    LogPrintf("%s\n", errmsg);
+    LogPrintf("You can use -debug=leveldb to get more complete diagnostic "
+              "messages\n");
+    throw dbwrapper_error(errmsg);
 }
 
 const std::vector<uint8_t> &GetObfuscateKey(const CDBWrapper &w) {

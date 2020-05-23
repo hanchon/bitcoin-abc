@@ -2,38 +2,25 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#ifndef WALLETINITINTERFACE_H
-#define WALLETINITINTERFACE_H
+#ifndef BITCOIN_WALLETINITINTERFACE_H
+#define BITCOIN_WALLETINITINTERFACE_H
 
-#include "chainparams.h"
-
-#include <string>
-
-class CScheduler;
-class CRPCTable;
+struct NodeContext;
 
 class WalletInitInterface {
 public:
+    /** Is the wallet component enabled */
+    virtual bool HasWalletSupport() const = 0;
     /** Get wallet help string */
-    virtual std::string GetHelpString(bool showDebug) = 0;
+    virtual void AddWalletOptions() const = 0;
     /** Check wallet parameter interaction */
-    virtual bool ParameterInteraction() = 0;
-    /** Register wallet RPC*/
-    virtual void RegisterRPC(CRPCTable &) = 0;
-    /** Verify wallets */
-    virtual bool Verify(const CChainParams &chainParams) = 0;
-    /** Open wallets*/
-    virtual bool Open(const CChainParams &chainParams) = 0;
-    /** Start wallets*/
-    virtual void Start(CScheduler &scheduler) = 0;
-    /** Flush Wallets*/
-    virtual void Flush() = 0;
-    /** Stop Wallets*/
-    virtual void Stop() = 0;
-    /** Close wallets */
-    virtual void Close() = 0;
+    virtual bool ParameterInteraction() const = 0;
+    /** Add wallets that should be opened to list of chain clients. */
+    virtual void Construct(NodeContext &node) const = 0;
 
     virtual ~WalletInitInterface() {}
 };
 
-#endif // WALLETINITINTERFACE_H
+extern const WalletInitInterface &g_wallet_init_interface;
+
+#endif // BITCOIN_WALLETINITINTERFACE_H

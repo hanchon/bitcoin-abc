@@ -1,13 +1,13 @@
 // Copyright (c) 2009-2010 Satoshi Nakamoto
 // Copyright (c) 2009-2016 The Bitcoin Core developers
-// Copyright (c) 2017-2018 The Bitcoin developers
+// Copyright (c) 2017-2019 The Bitcoin developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 #ifndef BITCOIN_AMOUNT_H
 #define BITCOIN_AMOUNT_H
 
-#include "serialize.h"
+#include <serialize.h>
 
 #include <cstdlib>
 #include <ostream>
@@ -22,7 +22,15 @@ private:
 
 public:
     constexpr Amount() : amount(0) {}
-    constexpr Amount(const Amount &_camount) : amount(_camount.amount) {}
+    constexpr Amount(const Amount &other) : amount(other.amount) {}
+
+    /**
+     * Assignement operator.
+     */
+    constexpr Amount &operator=(const Amount &other) {
+        amount = other.amount;
+        return *this;
+    }
 
     static constexpr Amount zero() { return Amount(0); }
     static constexpr Amount satoshi() { return Amount(1); }
@@ -146,7 +154,6 @@ typedef int64_t CAmount;
 static constexpr Amount SATOSHI = Amount::satoshi();
 static constexpr Amount CASH = 100 * SATOSHI;
 static constexpr Amount COIN = 100000000 * SATOSHI;
-static constexpr Amount CENT = COIN / 100;
 
 extern const std::string CURRENCY_UNIT;
 
@@ -165,4 +172,4 @@ inline bool MoneyRange(const Amount nValue) {
     return nValue >= Amount::zero() && nValue <= MAX_MONEY;
 }
 
-#endif //  BITCOIN_AMOUNT_H
+#endif // BITCOIN_AMOUNT_H

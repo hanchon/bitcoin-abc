@@ -10,10 +10,10 @@
 #ifndef BITCOIN_PROTOCOL_H
 #define BITCOIN_PROTOCOL_H
 
-#include "netaddress.h"
-#include "serialize.h"
-#include "uint256.h"
-#include "version.h"
+#include <netaddress.h>
+#include <serialize.h>
+#include <uint256.h>
+#include <version.h>
 
 #include <array>
 #include <cstdint>
@@ -49,6 +49,13 @@ public:
     typedef std::array<uint8_t, MESSAGE_START_SIZE> MessageMagic;
 
     explicit CMessageHeader(const MessageMagic &pchMessageStartIn);
+
+    /**
+     * Construct a P2P message header from message-start characters, a command
+     * and the size of the message.
+     * @note Passing in a `pszCommand` longer than COMMAND_SIZE will result in a
+     * run-time assertion error.
+     */
     CMessageHeader(const MessageMagic &pchMessageStartIn,
                    const char *pszCommand, unsigned int nMessageSizeIn);
 
@@ -61,10 +68,10 @@ public:
 
     template <typename Stream, typename Operation>
     inline void SerializationOp(Stream &s, Operation ser_action) {
-        READWRITE(FLATDATA(pchMessageStart));
-        READWRITE(FLATDATA(pchCommand));
+        READWRITE(pchMessageStart);
+        READWRITE(pchCommand);
         READWRITE(nMessageSize);
-        READWRITE(FLATDATA(pchChecksum));
+        READWRITE(pchChecksum);
     }
 
     MessageMagic pchMessageStart;
@@ -341,7 +348,7 @@ enum ServiceFlags : uint64_t {
  * Thus, generally, avoid calling with peerServices == NODE_NONE, unless
  * state-specific flags must absolutely be avoided. When called with
  * peerServices == NODE_NONE, the returned desirable service flags are
- * guaranteed to not change dependant on state - ie they are suitable for
+ * guaranteed to not change dependent on state - ie they are suitable for
  * use when describing peers which we know to be desirable, but for which
  * we do not have a confirmed set of service flags.
  *
@@ -396,7 +403,7 @@ public:
         uint64_t nServicesInt = nServices;
         READWRITE(nServicesInt);
         nServices = static_cast<ServiceFlags>(nServicesInt);
-        READWRITE(*static_cast<CService *>(this));
+        READWRITEAS(CService, *this);
     }
 
     // TODO: make private (improves encapsulation)
@@ -419,9 +426,9 @@ enum GetDataMsg {
     MSG_TX = 1,
     MSG_BLOCK = 2,
     // The following can only occur in getdata. Invs always use TX or BLOCK.
-    //!< Defined in BIP37
+    //! Defined in BIP37
     MSG_FILTERED_BLOCK = 3,
-    //!< Defined in BIP152
+    //! Defined in BIP152
     MSG_CMPCT_BLOCK = 4,
 };
 

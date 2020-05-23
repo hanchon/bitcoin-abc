@@ -2,9 +2,9 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#include "crypto/sha1.h"
+#include <crypto/sha1.h>
 
-#include "crypto/common.h"
+#include <crypto/common.h>
 
 #include <cstring>
 
@@ -162,7 +162,7 @@ CSHA1 &CSHA1::Write(const uint8_t *data, size_t len) {
         sha1::Transform(s, buf);
         bufsize = 0;
     }
-    while (end >= data + 64) {
+    while (end - data >= 64) {
         // Process full chunks directly from the source.
         sha1::Transform(s, data);
         bytes += 64;

@@ -2,14 +2,15 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#include "qvalidatedlineedit.h"
+#include <qt/qvalidatedlineedit.h>
 
-#include "bitcoinaddressvalidator.h"
-#include "guiconstants.h"
+#include <qt/bitcoinaddressvalidator.h>
+#include <qt/guiconstants.h>
 
 QValidatedLineEdit::QValidatedLineEdit(QWidget *parent)
-    : QLineEdit(parent), valid(true), checkValidator(0) {
-    connect(this, SIGNAL(textChanged(QString)), this, SLOT(markValid()));
+    : QLineEdit(parent), valid(true), checkValidator(nullptr) {
+    connect(this, &QValidatedLineEdit::textChanged, this,
+            &QValidatedLineEdit::markValid);
 }
 
 void QValidatedLineEdit::setValid(bool _valid) {
@@ -71,13 +72,15 @@ void QValidatedLineEdit::checkValidity() {
             QString address = text();
             int pos = 0;
             if (checkValidator->validate(address, pos) ==
-                QValidator::Acceptable)
+                QValidator::Acceptable) {
                 setValid(true);
-            else
+            } else {
                 setValid(false);
+            }
         }
-    } else
+    } else {
         setValid(false);
+    }
 
     Q_EMIT validationDidChange(this);
 }
@@ -91,8 +94,9 @@ bool QValidatedLineEdit::isValid() {
     if (checkValidator) {
         QString address = text();
         int pos = 0;
-        if (checkValidator->validate(address, pos) == QValidator::Acceptable)
+        if (checkValidator->validate(address, pos) == QValidator::Acceptable) {
             return true;
+        }
     }
 
     return valid;

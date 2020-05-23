@@ -2,33 +2,24 @@ UNIX BUILD NOTES
 ====================
 Some notes on how to build Bitcoin ABC in Unix.
 
-(for OpenBSD specific instructions, see [build-openbsd.md](build-openbsd.md))
-
-Note
----------------------
-Always use absolute paths to configure and compile bitcoin and the dependencies,
-for example, when specifying the path of the dependency:
-
-	../dist/configure --enable-cxx --disable-shared --with-pic --prefix=$BDB_PREFIX
-
-Here BDB_PREFIX must be an absolute path - it is defined using $(pwd) which ensures
-the usage of the absolute path.
+(For FreeBSD specific instructions, see `build-freebsd.md` in this directory.)
 
 To Build
 ---------------------
 
+Before you start building, please make sure that your compiler supports C++14.
+
 It is recommended to create a build directory to build out-of-tree.
 
 ```bash
-./autogen.sh
 mkdir build
 cd build
-../configure
-make
-make install # optional
+cmake -GNinja ..
+ninja
+ninja install # optional
 ```
 
-This will build bitcoin-qt as well if the dependencies are met.
+This will build bitcoin-qt as well.
 
 Dependencies
 ---------------------
@@ -48,12 +39,12 @@ Optional dependencies:
  miniupnpc   | UPnP Support     | Firewall-jumping support
  libdb       | Berkeley DB      | Wallet storage (only needed when wallet enabled)
  qt          | GUI              | GUI toolkit (only needed when GUI enabled)
- protobuf    | Payments in GUI  | Data interchange format used for payment protocol (only needed when GUI enabled)
+ protobuf    | Payments in GUI  | Data interchange format used for payment protocol (only needed when BIP70 enabled)
  libqrencode | QR codes in GUI  | Optional for generating QR codes (only needed when GUI enabled)
  univalue    | Utility          | JSON parsing and encoding (bundled version will be used unless --with-system-univalue passed to configure)
- libzmq3     | ZMQ notification | Optional, allows generating ZMQ notifications (requires ZMQ version >= 4.x)
+ libzmq3     | ZMQ notification | Optional, allows generating ZMQ notifications (requires ZMQ version >= 4.1.5)
 
-For the versions used in the release, see [release-process.md](release-process.md) under *Fetch and build inputs*.
+For the versions used, see [dependencies.md](dependencies.md)
 
 Memory Requirements
 --------------------
@@ -62,22 +53,42 @@ C++ compilers are memory-hungry. It is recommended to have at least 1.5 GB of
 memory available when compiling Bitcoin ABC. On systems with less, gcc can be
 tuned to conserve memory with additional CXXFLAGS:
 
-
-    ./configure CXXFLAGS="--param ggc-min-expand=1 --param ggc-min-heapsize=32768"
+    cmake -GNinja .. -DCXXFLAGS="--param ggc-min-expand=1 --param ggc-min-heapsize=32768"
 
 Dependency Build Instructions: Ubuntu & Debian
 ----------------------------------------------
 Build requirements:
 
-    sudo apt-get install build-essential libtool autotools-dev automake pkg-config libssl-dev libevent-dev bsdmainutils
+    sudo apt-get install bsdmainutils build-essential libssl-dev libevent-dev ninja-build python3
+
+On Debian Buster (10) or Ubuntu 19.04 and later:
+
+    sudo apt-get install cmake
+
+On previous Ubuntu versions, the `cmake` package is too old and needs to be installed from the Kitware APT repository:
+
+    sudo apt-get install apt-transport-https ca-certificates gnupg software-properties-common wget
+    wget -O - https://apt.kitware.com/keys/kitware-archive-latest.asc 2>/dev/null | sudo apt-key add -
+
+Add the repository corresponding to your version (see [instructions from Kitware](https://apt.kitware.com)). For Ubuntu Bionic (18.04):
+
+    sudo apt-add-repository 'deb https://apt.kitware.com/ubuntu/ bionic main'
+
+Then update the package list and install `cmake`:
+
+    sudo apt update
+    sudo apt install cmake
+
+Now, you can either build from self-compiled [depends](/depends/README.md) or
+install the required dependencies with the following instructions.
 
 Options when installing required Boost library files:
 
-1. On at least Ubuntu 14.04+ and Debian 7+ there are generic names for the
+1. On at least Ubuntu 16.04+ and Debian 9+ there are generic names for the
 individual boost development packages, so the following can be used to only
 install necessary parts of boost:
 
-        sudo apt-get install libboost-system-dev libboost-filesystem-dev libboost-chrono-dev libboost-program-options-dev libboost-test-dev libboost-thread-dev
+        sudo apt-get install libboost-system-dev libboost-filesystem-dev libboost-chrono-dev libboost-test-dev libboost-thread-dev
 
 2. If that doesn't work, you can install all boost development packages with:
 
@@ -89,47 +100,48 @@ BerkeleyDB 5.3 or later is required for the wallet. This can be installed with:
 
 See the section "Disable-wallet mode" to build Bitcoin ABC without wallet.
 
-Optional (see --with-miniupnpc and --enable-upnp-default):
+Minipupnc dependencies (can be disabled by passing `-DENABLE_UPNP=OFF` on the cmake command line):
 
     sudo apt-get install libminiupnpc-dev
 
-ZMQ dependencies (provides ZMQ API 4.x):
+ZMQ dependencies (provides ZMQ API, can be disabled by passing `-DBUILD_BITCOIN_ZMQ=OFF` on the cmake command line):
 
     sudo apt-get install libzmq3-dev
 
 Dependencies for the GUI: Ubuntu & Debian
 -----------------------------------------
 
-If you want to build Bitcoin-Qt, make sure that the required packages for Qt development
+If you want to build bitcoin-qt, make sure that the required packages for Qt development
 are installed. Qt 5 is necessary to build the GUI.
-To build without GUI pass `--without-gui`.
+To build without GUI pass `-DBUILD_BITCOIN_QT=OFF` on the cmake command line.
 
 To build with Qt 5 you need the following:
 
     sudo apt-get install libqt5gui5 libqt5core5a libqt5dbus5 qttools5-dev qttools5-dev-tools libprotobuf-dev protobuf-compiler
 
-libqrencode (optional) can be installed with:
+libqrencode dependencies (can be disabled by passing `-DENABLE_QRCODE=OFF` on the cmake command line):
 
     sudo apt-get install libqrencode-dev
-
-Once these are installed, they will be found by configure and a bitcoin-qt executable will be
-built by default.
 
 Dependency Build Instructions: Fedora
 -------------------------------------
 Build requirements:
 
-    sudo dnf install gcc-c++ libtool make autoconf automake openssl-devel libevent-devel boost-devel libdb-devel libdb-cxx-devel
+    sudo dnf install boost-devel cmake gcc-c++ libdb-cxx-devel libdb-devel libevent-devel ninja-build openssl-devel python3
 
-Optional:
+Minipupnc dependencies (can be disabled by passing `-DENABLE_UPNP=OFF` on the cmake command line):
 
     sudo dnf install miniupnpc-devel
+
+ZMQ dependencies (can be disabled by passing `-DBUILD_BITCOIN_ZMQ=OFF` on the cmake command line):
+
+    sudo dnf install zeromq-devel
 
 To build with Qt 5 you need the following:
 
     sudo dnf install qt5-qttools-devel qt5-qtbase-devel protobuf-devel
 
-libqrencode (optional) can be installed with:
+libqrencode dependencies (can be disabled by passing `-DENABLE_QRCODE=OFF`):
 
     sudo dnf install qrencode-devel
 
@@ -144,11 +156,10 @@ miniupnpc
 
 [miniupnpc](http://miniupnp.free.fr/) may be used for UPnP port mapping.  It can be downloaded from [here](
 http://miniupnp.tuxfamily.org/files/).  UPnP support is compiled in and
-turned off by default.  See the configure options for upnp behavior desired:
+turned off by default.  See the cmake options for upnp behavior desired:
 
-	--without-miniupnpc      No UPnP support miniupnp not required
-	--disable-upnp-default   (the default) UPnP support turned off by default at runtime
-	--enable-upnp-default    UPnP support turned on by default at runtime
+    ENABLE_UPNP            Enable UPnP support (miniupnp required, default ON)
+    START_WITH_UPNP        UPnP support turned on by default at runtime (default OFF)
 
 Boost
 -----
@@ -156,23 +167,15 @@ For documentation on building Boost look at their official documentation: http:/
 
 Security
 --------
-To help make your bitcoin installation more secure by making certain attacks impossible to
+To help make your Bitcoin ABC installation more secure by making certain attacks impossible to
 exploit even if a vulnerability is found, binaries are hardened by default.
-This can be disabled with:
-
-Hardening Flags:
-
-	./configure --enable-hardening
-	./configure --disable-hardening
-
+This can be disabled by passing `-DENABLE_HARDENING=OFF`.
 
 Hardening enables the following features:
-
-* Position Independent Executable
-    Build position independent code to take advantage of Address Space Layout Randomization
+* _Position Independent Executable_: Build position independent code to take advantage of Address Space Layout Randomization
     offered by some kernels. Attackers who can cause execution of code at an arbitrary memory
     location are thwarted if they don't know where anything useful is located.
-    The stack and heap are randomly located by default but this allows the code section to be
+    The stack and heap are randomly located by default, but this allows the code section to be
     randomly located as well.
 
     On an AMD64 processor where a library was not compiled with -fPIC, this will cause an error
@@ -180,122 +183,75 @@ Hardening enables the following features:
 
     To test that you have built PIE executable, install scanelf, part of paxutils, and use:
 
-    	scanelf -e ./bitcoin
+      scanelf -e ./bitcoin
 
     The output should contain:
 
-     TYPE
-    ET_DYN
+      TYPE
+      ET_DYN
 
-* Non-executable Stack
-    If the stack is executable then trivial stack based buffer overflow exploits are possible if
-    vulnerable buffers are found. By default, bitcoin should be built with a non-executable stack
+* _Non-executable Stack_: If the stack is executable then trivial stack-based buffer overflow exploits are possible if
+    vulnerable buffers are found. By default, Bitcoin ABC should be built with a non-executable stack,
     but if one of the libraries it uses asks for an executable stack or someone makes a mistake
     and uses a compiler extension which requires an executable stack, it will silently build an
     executable without the non-executable stack protection.
 
     To verify that the stack is non-executable after compiling use:
-    `scanelf -e ./bitcoin`
 
-    the output should contain:
-	STK/REL/PTL
-	RW- R-- RW-
+      scanelf -e ./bitcoin
 
-    The STK RW- means that the stack is readable and writeable but not executable.
+    The output should contain:
+
+      STK/REL/PTL
+      RW- R-- RW-
+
+    The `STK RW-` means that the stack is readable and writeable but not executable.
 
 Disable-wallet mode
 --------------------
-When the intention is to run only a P2P node without a wallet, bitcoin may be compiled in
-disable-wallet mode with:
+When the intention is to run only a P2P node without a wallet, Bitcoin ABC may be compiled in
+disable-wallet mode by passing `-DBUILD_BITCOIN_WALLET=OFF` on the cmake command line.
 
-    ./configure --disable-wallet
+Mining is also possible in disable-wallet mode using the `getblocktemplate` RPC call.
 
-Mining is also possible in disable-wallet mode, but only using the `getblocktemplate` RPC
-call not `getwork`.
-
-Additional Configure Flags
+Additional cmake options
 --------------------------
-A list of additional configure flags can be displayed with:
-
-    ./configure --help
-
+A list of the cmake options and their current value can be displayed.
+From the build subdirectory (see above), run `cmake -LH ..`.
 
 Setup and Build Example: Arch Linux
 -----------------------------------
 This example lists the steps necessary to setup and build a command line only, non-wallet distribution of the latest changes on Arch Linux:
 
-    pacman -S git base-devel boost libevent python
+    pacman -S boost cmake git libevent ninja python
     git clone https://github.com/Bitcoin-ABC/bitcoin-abc.git
     cd bitcoin-abc/
-    ./autogen.sh
-    ./configure --disable-wallet --without-gui --without-miniupnpc
-    make check
+    mkdir build
+    cd build
+    cmake -GNinja .. -DBUILD_BITCOIN_WALLET=OFF -DBUILD_BITCOIN_QT=OFF -DENABLE_UPNP=OFF -DBUILD_BITCOIN_ZMQ=OFF
+    ninja
 
 
 ARM Cross-compilation
 -------------------
-These steps can be performed on, for example, an Ubuntu VM. The depends system
+These steps can be performed on, for example, a Debian VM. The depends system
 will also work on other Linux distributions, however the commands for
 installing the toolchain will be different.
 
-Make sure you install the build requirements mentioned above.
-Then, install the toolchain and curl:
+Make sure you install all the build requirements mentioned above.
+Then, install the toolchain and some additional dependencies:
 
-    sudo apt-get install g++-arm-linux-gnueabihf curl
+    sudo apt-get install autoconf automake curl g++-arm-linux-gnueabihf gcc-arm-linux-gnueabihf gperf pkg-config
 
 To build executables for ARM:
 
     cd depends
-    make HOST=arm-linux-gnueabihf NO_QT=1
+    make build-linux-arm
     cd ..
-    ./configure --prefix=$PWD/depends/arm-linux-gnueabihf --enable-glibc-back-compat --enable-reduce-exports LDFLAGS=-static-libstdc++
-    make
+    mkdir build
+    cd build
+    cmake -GNinja .. -DCMAKE_TOOLCHAIN_FILE=../cmake/platforms/LinuxARM.cmake -DENABLE_GLIBC_BACK_COMPAT=ON -DENABLE_STATIC_LIBSTDCXX=ON
+    ninja
 
 
 For further documentation on the depends system see [README.md](../depends/README.md) in the depends directory.
-
-Building on FreeBSD
---------------------
-
-(Updated as of FreeBSD 11.0)
-
-Clang is installed by default as `cc` compiler, this makes it easier to get
-started than on [OpenBSD](build-openbsd.md). Installing dependencies:
-
-    pkg install autoconf automake libtool pkgconf
-    pkg install boost-libs openssl libevent gmake
-
-(`libressl` instead of `openssl` will also work)
-
-For the wallet (optional):
-
-    pkg install db5
-
-This will give a warning "configure: WARNING: Found Berkeley DB other
-than 4.8; wallets opened by this build will not be portable!", but as FreeBSD never
-had a binary release, this may not matter. If backwards compatibility
-with 4.8-built Bitcoin Core is needed follow the steps under "Berkeley DB" above.
-
-Also, if you intend to run the regression tests (qa tests):
-
-    pkg install python3
-
-Then build using:
-
-    ./autogen.sh
-  
-With wallet support:
-
-    ./configure --without-gui --without-miniupnpc --with-incompatible-bdb BDB_CFLAGS="-I/usr/local/include/db5" BDB_LIBS="-L/usr/local/lib -ldb_cxx-5"
-
-Without wallet support:
-
-    ./configure --without-gui --without-miniupnpc --disable-wallet
-
-Then to compile:
-
-    gmake
-
-*Note on debugging*: The version of `gdb` installed by default is [ancient and considered harmful](https://wiki.freebsd.org/GdbRetirement).
-It is not suitable for debugging a multi-threaded C++ program, not even for getting backtraces. Please install the package `gdb` and
-use the versioned gdb command e.g. `gdb7111`.

@@ -21,8 +21,6 @@ import os.path
 
 settings = {}
 
-##### Switch endian-ness #####
-
 
 def hex_switchEndian(s):
     """ Switches the endianness of a hex string (in pairs of hex chars) """
@@ -104,7 +102,7 @@ def get_block_hashes(settings, max_blocks_per_call=10000):
 
 def get_rpc_cookie():
     # Open the cookie file
-    with open(os.path.join(os.path.expanduser(settings['datadir']), '.cookie'), 'r') as f:
+    with open(os.path.join(os.path.expanduser(settings['datadir']), '.cookie'), 'r', encoding="ascii") as f:
         combined = f.readline()
         combined_split = combined.split(":")
         settings['rpcuser'] = combined_split[0]
@@ -116,15 +114,15 @@ if __name__ == '__main__':
         print("Usage: linearize-hashes.py CONFIG-FILE")
         sys.exit(1)
 
-    f = open(sys.argv[1])
+    f = open(sys.argv[1], encoding="utf8")
     for line in f:
         # skip comment lines
-        m = re.search('^\s*#', line)
+        m = re.search(r'^\s*#', line)
         if m:
             continue
 
         # parse key=value lines
-        m = re.search('^(\w+)\s*=\s*(\S.*)$', line)
+        m = re.search(r'^(\w+)\s*=\s*(\S.*)$', line)
         if m is None:
             continue
         settings[m.group(1)] = m.group(2)
@@ -148,14 +146,16 @@ if __name__ == '__main__':
     if 'datadir' in settings and not use_userpass:
         use_datadir = True
     if not use_userpass and not use_datadir:
-        print("Missing datadir or username and/or password in cfg file", file=sys.stderr)
+        print("Missing datadir or username and/or password in cfg file",
+              file=sys.stderr)
         sys.exit(1)
 
     settings['port'] = int(settings['port'])
     settings['min_height'] = int(settings['min_height'])
     settings['max_height'] = int(settings['max_height'])
 
-    # Force hash byte format setting to be lowercase to make comparisons easier.
+    # Force hash byte format setting to be lowercase to make comparisons
+    # easier.
     settings['rev_hash_bytes'] = settings['rev_hash_bytes'].lower()
 
     # Get the rpc user and pass from the cookie if the datadir is set

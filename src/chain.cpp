@@ -3,7 +3,7 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#include "chain.h"
+#include <chain.h>
 
 /**
  * CChain implementation
@@ -23,7 +23,7 @@ void CChain::SetTip(CBlockIndex *pindex) {
 
 CBlockLocator CChain::GetLocator(const CBlockIndex *pindex) const {
     int nStep = 1;
-    std::vector<uint256> vHave;
+    std::vector<BlockHash> vHave;
     vHave.reserve(32);
 
     if (!pindex) {
@@ -93,12 +93,12 @@ static inline int GetSkipHeight(int height) {
                         : InvertLowestOne(height);
 }
 
-CBlockIndex *CBlockIndex::GetAncestor(int height) {
+const CBlockIndex *CBlockIndex::GetAncestor(int height) const {
     if (height > nHeight || height < 0) {
         return nullptr;
     }
 
-    CBlockIndex *pindexWalk = this;
+    const CBlockIndex *pindexWalk = this;
     int heightWalk = nHeight;
     while (heightWalk > height) {
         int heightSkip = GetSkipHeight(heightWalk);
@@ -119,8 +119,9 @@ CBlockIndex *CBlockIndex::GetAncestor(int height) {
     return pindexWalk;
 }
 
-const CBlockIndex *CBlockIndex::GetAncestor(int height) const {
-    return const_cast<CBlockIndex *>(this)->GetAncestor(height);
+CBlockIndex *CBlockIndex::GetAncestor(int height) {
+    return const_cast<CBlockIndex *>(
+        const_cast<const CBlockIndex *>(this)->GetAncestor(height));
 }
 
 void CBlockIndex::BuildSkip() {
@@ -138,9 +139,9 @@ arith_uint256 GetBlockProof(const CBlockIndex &block) {
         return 0;
     }
     // We need to compute 2**256 / (bnTarget+1), but we can't represent 2**256
-    // as it's too large for a arith_uint256. However, as 2**256 is at least as
+    // as it's too large for an arith_uint256. However, as 2**256 is at least as
     // large as bnTarget+1, it is equal to ((2**256 - bnTarget - 1) /
-    // (bnTarget+1)) + 1, or ~bnTarget / (nTarget+1) + 1.
+    // (bnTarget+1)) + 1, or ~bnTarget / (bnTarget+1) + 1.
     return (~bnTarget / (bnTarget + 1)) + 1;
 }
 
@@ -176,8 +177,14 @@ const CBlockIndex *LastCommonAncestor(const CBlockIndex *pa,
     }
 
     while (pa != pb && pa && pb) {
-        pa = pa->pprev;
-        pb = pb->pprev;
+        if (pa->pskip && pb->pskip && pa->pskip != pb->pskip) {
+            pa = pa->pskip;
+            pb = pb->pskip;
+            assert(pa->nHeight == pb->nHeight);
+        } else {
+            pa = pa->pprev;
+            pb = pb->pprev;
+        }
     }
 
     // Eventually all chain branches meet at the genesis block.
@@ -186,8 +193,10 @@ const CBlockIndex *LastCommonAncestor(const CBlockIndex *pa,
 }
 
 bool AreOnTheSameFork(const CBlockIndex *pa, const CBlockIndex *pb) {
-    // The common ancestor needs to be either pa (pb is a child of pa) or pb (pa
-    // is a child of pb).
-    const CBlockIndex *pindexCommon = LastCommonAncestor(pa, pb);
-    return pindexCommon == pa || pindexCommon == pb;
+    if (pa->nHeight > pb->nHeight) {
+        pa = pa->GetAncestor(pb->nHeight);
+    } else if (pb->nHeight > pa->nHeight) {
+        pb = pb->GetAncestor(pa->nHeight);
+    }
+    return pa == pb;
 }

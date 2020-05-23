@@ -1,9 +1,12 @@
-// Copyright (c) 2015-2016 The Bitcoin Core developers
+// Copyright (c) 2015-2019 The Bitcoin Core developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#include "consensus/merkle.h"
-#include "test/test_bitcoin.h"
+#include <consensus/merkle.h>
+
+#include <util/strencodings.h>
+
+#include <test/setup_common.h>
 
 #include <boost/test/unit_test.hpp>
 
@@ -34,10 +37,16 @@ static void MerkleComputation(const std::vector<uint256> &leaves,
                               uint256 *proot, bool *pmutated,
                               uint32_t branchpos,
                               std::vector<uint256> *pbranch) {
-    if (pbranch) pbranch->clear();
+    if (pbranch) {
+        pbranch->clear();
+    }
     if (leaves.size() == 0) {
-        if (pmutated) *pmutated = false;
-        if (proot) *proot = uint256();
+        if (pmutated) {
+            *pmutated = false;
+        }
+        if (proot) {
+            *proot = uint256();
+        }
         return;
     }
     bool mutated = false;
@@ -125,8 +134,12 @@ static void MerkleComputation(const std::vector<uint256> &leaves,
         }
     }
     // Return result.
-    if (pmutated) *pmutated = mutated;
-    if (proot) *proot = h;
+    if (pmutated) {
+        *pmutated = mutated;
+    }
+    if (proot) {
+        *proot = h;
+    }
 }
 
 static std::vector<uint256>
@@ -153,8 +166,9 @@ static uint256 BlockBuildMerkleTree(const CBlock &block, bool *fMutated,
     // Safe upper bound for the number of total nodes.
     vMerkleTree.reserve(block.vtx.size() * 2 + 16);
     for (std::vector<CTransactionRef>::const_iterator it(block.vtx.begin());
-         it != block.vtx.end(); ++it)
+         it != block.vtx.end(); ++it) {
         vMerkleTree.push_back((*it)->GetId());
+    }
     int j = 0;
     bool mutated = false;
     for (int nSize = block.vtx.size(); nSize > 1; nSize = (nSize + 1) / 2) {
@@ -194,7 +208,9 @@ BlockGetMerkleBranch(const CBlock &block,
 }
 
 static inline int ctz(uint32_t i) {
-    if (i == 0) return 0;
+    if (i == 0) {
+        return 0;
+    }
     int j = 0;
     while (!(i & 1)) {
         j++;
@@ -222,11 +238,15 @@ BOOST_AUTO_TEST_CASE(merkle_test) {
             int ntx1 = ntx + duplicate1;
             // Likewise for the second mutation.
             int duplicate2 = mutate >= 2 ? 1 << ctz(ntx1) : 0;
-            if (duplicate2 >= ntx1) break;
+            if (duplicate2 >= ntx1) {
+                break;
+            }
             int ntx2 = ntx1 + duplicate2;
             // And for the third mutation.
             int duplicate3 = mutate >= 3 ? 1 << ctz(ntx2) : 0;
-            if (duplicate3 >= ntx2) break;
+            if (duplicate3 >= ntx2) {
+                break;
+            }
             int ntx3 = ntx2 + duplicate3;
             // Build a block with ntx different transactions.
             CBlock block;
@@ -269,7 +289,7 @@ BOOST_AUTO_TEST_CASE(merkle_test) {
             // branches.
             if (mutate == 0) {
                 for (int loop = 0; loop < std::min(ntx, 16); loop++) {
-                    // If ntx <= 16, try all branches. Otherise, try 16 random
+                    // If ntx <= 16, try all branches. Otherwise, try 16 random
                     // ones.
                     int mtx = loop;
                     if (ntx > 16) {

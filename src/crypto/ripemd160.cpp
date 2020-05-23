@@ -2,9 +2,9 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#include "crypto/ripemd160.h"
+#include <crypto/ripemd160.h>
 
-#include "crypto/common.h"
+#include <crypto/common.h>
 
 #include <cstring>
 
@@ -294,7 +294,7 @@ CRIPEMD160 &CRIPEMD160::Write(const uint8_t *data, size_t len) {
         ripemd160::Transform(s, buf);
         bufsize = 0;
     }
-    while (end >= data + 64) {
+    while (end - data >= 64) {
         // Process full chunks directly from the source.
         ripemd160::Transform(s, data);
         bytes += 64;

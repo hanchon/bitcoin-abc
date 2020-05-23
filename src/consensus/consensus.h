@@ -18,13 +18,13 @@ static const uint64_t MIN_TX_SIZE = 100;
 static const uint64_t LEGACY_MAX_BLOCK_SIZE = ONE_MEGABYTE;
 /** Default setting for maximum allowed size for a block, in bytes */
 static const uint64_t DEFAULT_MAX_BLOCK_SIZE = 32 * ONE_MEGABYTE;
+/** Allowed number of signature check operations per transaction. */
+static const uint64_t MAX_TX_SIGCHECKS = 3000;
 /**
- * The maximum allowed number of signature check operations per MB in a block
- * (network rule).
+ * The ratio between the maximum allowable block size and the maximum allowable
+ * SigChecks (executed signature check operations) in the block. (network rule).
  */
-static const int64_t MAX_BLOCK_SIGOPS_PER_MB = 20000;
-/** allowed number of signature check operations per transaction. */
-static const uint64_t MAX_TX_SIGOPS_COUNT = 20000;
+static const int BLOCK_MAXBYTES_MAXSIGCHECKS_RATIO = 141;
 /**
  * Coinbase transaction outputs can only be spent after this number of new
  * blocks (network rule).
@@ -32,8 +32,6 @@ static const uint64_t MAX_TX_SIGOPS_COUNT = 20000;
 static const int COINBASE_MATURITY = 100;
 /** Coinbase scripts have their own script size limit. */
 static const int MAX_COINBASE_SCRIPTSIG_SIZE = 100;
-/** Activation time for P2SH (April 1st 2012) */
-static const int64_t P2SH_ACTIVATION_TIME = 1333234914;
 
 /** Flags for nSequence and nLockTime locks */
 /** Interpret sequence numbers as relative lock-time constraints. */
@@ -42,14 +40,14 @@ static constexpr unsigned int LOCKTIME_VERIFY_SEQUENCE = (1 << 0);
 static constexpr unsigned int LOCKTIME_MEDIAN_TIME_PAST = (1 << 1);
 
 /**
- * Compute the maximum number of sigops operation that can contained in a block
- * given the block size as parameter. It is computed by multiplying
- * MAX_BLOCK_SIGOPS_PER_MB by the size of the block in MB rounded up to the
- * closest integer.
+ * Compute the maximum number of sigchecks that can be contained in a block
+ * given the MAXIMUM block size as parameter. The maximum sigchecks scale
+ * linearly with the maximum block size and do not depend on the actual
+ * block size. The returned value is rounded down (there are no fractional
+ * sigchecks so the fractional part is meaningless).
  */
-inline uint64_t GetMaxBlockSigOpsCount(uint64_t blockSize) {
-    auto nMbRoundedUp = 1 + ((blockSize - 1) / ONE_MEGABYTE);
-    return nMbRoundedUp * MAX_BLOCK_SIGOPS_PER_MB;
+inline uint64_t GetMaxBlockSigChecksCount(uint64_t maxBlockSize) {
+    return maxBlockSize / BLOCK_MAXBYTES_MAXSIGCHECKS_RATIO;
 }
 
 #endif // BITCOIN_CONSENSUS_CONSENSUS_H

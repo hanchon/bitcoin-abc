@@ -2,17 +2,19 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#include "blockencodings.h"
-#include "chainparams.h"
-#include "config.h"
-#include "consensus/consensus.h"
-#include "consensus/validation.h"
-#include "hash.h"
-#include "random.h"
-#include "streams.h"
-#include "txmempool.h"
-#include "util.h"
-#include "validation.h"
+#include <blockencodings.h>
+
+#include <chainparams.h>
+#include <config.h>
+#include <consensus/consensus.h>
+#include <consensus/validation.h>
+#include <crypto/sha256.h>
+#include <crypto/siphash.h>
+#include <random.h>
+#include <streams.h>
+#include <txmempool.h>
+#include <util/system.h>
+#include <validation.h>
 
 #include <unordered_map>
 
@@ -40,7 +42,7 @@ void CBlockHeaderAndShortTxIDs::FillShortTxIDSelector() const {
     shorttxidk1 = shorttxidhash.GetUint64(1);
 }
 
-uint64_t CBlockHeaderAndShortTxIDs::GetShortID(const uint256 &txhash) const {
+uint64_t CBlockHeaderAndShortTxIDs::GetShortID(const TxHash &txhash) const {
     static_assert(SHORTTXIDS_LENGTH == 6,
                   "shorttxids calculation assumes 6-byte shorttxids");
     return SipHashUint256(shorttxidk0, shorttxidk1, txhash) & 0xffffffffffffL;
@@ -48,7 +50,7 @@ uint64_t CBlockHeaderAndShortTxIDs::GetShortID(const uint256 &txhash) const {
 
 ReadStatus PartiallyDownloadedBlock::InitData(
     const CBlockHeaderAndShortTxIDs &cmpctblock,
-    const std::vector<std::pair<uint256, CTransactionRef>> &extra_txns) {
+    const std::vector<std::pair<TxHash, CTransactionRef>> &extra_txns) {
     if (cmpctblock.header.IsNull() ||
         (cmpctblock.shorttxids.empty() && cmpctblock.prefilledtxn.empty())) {
         return READ_STATUS_INVALID;
@@ -129,7 +131,7 @@ ReadStatus PartiallyDownloadedBlock::InitData(
     std::vector<bool> have_txn(txns_available.size());
     {
         LOCK(pool->cs);
-        const std::vector<std::pair<uint256, CTxMemPool::txiter>> &vTxHashes =
+        const std::vector<std::pair<TxHash, CTxMemPool::txiter>> &vTxHashes =
             pool->vTxHashes;
         for (auto txHash : vTxHashes) {
             uint64_t shortid = cmpctblock.GetShortID(txHash.first);
@@ -174,7 +176,7 @@ ReadStatus PartiallyDownloadedBlock::InitData(
                 // If we find two mempool/extra txn that match the short id,
                 // just request it. This should be rare enough that the extra
                 // bandwidth doesn't matter, but eating a round-trip due to
-                // FillBlock failure would be annoying. Note that we dont want
+                // FillBlock failure would be annoying. Note that we don't want
                 // duplication between extra_txns and mempool to trigger this
                 // case, so we compare hashes first.
                 if (txns_available[idit->second] &&
@@ -199,7 +201,7 @@ ReadStatus PartiallyDownloadedBlock::InitData(
              "Initialized PartiallyDownloadedBlock for block %s using a "
              "cmpctblock of size %lu\n",
              cmpctblock.header.GetHash().ToString(),
-             GetSerializeSize(cmpctblock, SER_NETWORK, PROTOCOL_VERSION));
+             GetSerializeSize(cmpctblock, PROTOCOL_VERSION));
 
     return READ_STATUS_OK;
 }
@@ -207,7 +209,7 @@ ReadStatus PartiallyDownloadedBlock::InitData(
 bool PartiallyDownloadedBlock::IsTxAvailable(size_t index) const {
     assert(!header.IsNull());
     assert(index < txns_available.size());
-    return txns_available[index] ? true : false;
+    return txns_available[index] != nullptr;
 }
 
 ReadStatus PartiallyDownloadedBlock::FillBlock(
@@ -239,7 +241,8 @@ ReadStatus PartiallyDownloadedBlock::FillBlock(
     }
 
     CValidationState state;
-    if (!CheckBlock(*config, block, state)) {
+    if (!CheckBlock(block, state, config->GetChainParams().GetConsensus(),
+                    BlockValidationOptions(*config))) {
         // TODO: We really want to just check merkle tree manually here, but
         // that is expensive, and CheckBlock caches a block's "checked-status"
         // (in the CBlock?). CBlock should be able to check its own merkle root

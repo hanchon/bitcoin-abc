@@ -1,16 +1,18 @@
 // Copyright (c) 2009-2010 Satoshi Nakamoto
 // Copyright (c) 2009-2016 The Bitcoin Core developers
-// Copyright (c) 2017 The Bitcoin developers
+// Copyright (c) 2017-2019 The Bitcoin developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 #ifndef BITCOIN_UNDO_H
 #define BITCOIN_UNDO_H
 
-#include "coins.h"
-#include "compressor.h"
-#include "consensus/consensus.h"
-#include "serialize.h"
+#include <coins.h>
+#include <compressor.h>
+#include <consensus/consensus.h>
+#include <disconnectresult.h>
+#include <serialize.h>
+#include <version.h>
 
 class CBlock;
 class CBlockIndex;
@@ -21,7 +23,7 @@ class CValidationState;
  * Undo information for a CTxIn
  *
  * Contains the prevout's CTxOut being spent, and its metadata as well (coinbase
- * or not, height). The serialization contains a dummy value of zero. This is be
+ * or not, height). The serialization contains a dummy value of zero. This is
  * compatible with older versions which expect to see the transaction version
  * there.
  */
@@ -57,19 +59,19 @@ public:
             // Old versions stored the version number for the last spend of a
             // transaction's outputs. Non-final spends were indicated with
             // height = 0.
-            int nVersionDummy;
+            unsigned int nVersionDummy;
             ::Unserialize(s, VARINT(nVersionDummy));
         }
 
         CTxOut txout;
-        ::Unserialize(s, REF(CTxOutCompressor(REF(txout))));
+        ::Unserialize(s, CTxOutCompressor(REF(txout)));
 
         *pcoin = Coin(std::move(txout), nHeight, fCoinBase);
     }
 };
 
 static const size_t MAX_INPUTS_PER_TX =
-    MAX_TX_SIZE / ::GetSerializeSize(CTxIn(), SER_NETWORK, PROTOCOL_VERSION);
+    MAX_TX_SIZE / ::GetSerializeSize(CTxIn(), PROTOCOL_VERSION);
 
 /** Restore the UTXO in a Coin at a given COutPoint */
 class CTxUndo {
@@ -82,7 +84,7 @@ public:
         uint64_t count = vprevout.size();
         ::Serialize(s, COMPACTSIZE(REF(count)));
         for (const auto &prevout : vprevout) {
-            ::Serialize(s, REF(TxInUndoSerializer(&prevout)));
+            ::Serialize(s, TxInUndoSerializer(&prevout));
         }
     }
 
@@ -95,7 +97,7 @@ public:
         }
         vprevout.resize(count);
         for (auto &prevout : vprevout) {
-            ::Unserialize(s, REF(TxInUndoDeserializer(&prevout)));
+            ::Unserialize(s, TxInUndoDeserializer(&prevout));
         }
     }
 };
@@ -112,15 +114,6 @@ public:
     inline void SerializationOp(Stream &s, Operation ser_action) {
         READWRITE(vtxundo);
     }
-};
-
-enum DisconnectResult {
-    // All good.
-    DISCONNECT_OK,
-    // Rolled back, but UTXO set was inconsistent with block.
-    DISCONNECT_UNCLEAN,
-    // Something else went wrong.
-    DISCONNECT_FAILED,
 };
 
 /**

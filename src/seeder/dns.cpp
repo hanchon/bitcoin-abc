@@ -1,11 +1,8 @@
-#include "dns.h"
+// Copyright (c) 2017-2020 The Bitcoin developers
+// Distributed under the MIT software license, see the accompanying
+// file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#include <cctype>
-#include <cstdbool>
-#include <cstdio>
-#include <cstdlib>
-#include <cstring>
-#include <ctime>
+#include <seeder/dns.h>
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
@@ -13,6 +10,13 @@
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <unistd.h>
+
+#include <cctype>
+#include <cstdbool>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <ctime>
 
 #define BUFLEN 512
 
@@ -33,7 +37,10 @@ union control_data {
     uint8_t data[DSTADDR_DATASIZE];
 };
 
-typedef enum { CLASS_IN = 1, QCLASS_ANY = 255 } dns_class;
+typedef enum {
+    CLASS_IN = 1,
+    QCLASS_ANY = 255,
+} dns_class;
 
 typedef enum {
     TYPE_A = 1,
@@ -46,75 +53,116 @@ typedef enum {
     QTYPE_ANY = 255
 } dns_type;
 
-//  0: ok
-// -1: premature end of input, forward reference, component > 63 char, invalid
-// character
-// -2: insufficient space in output
-static int parse_name(const uint8_t **inpos, const uint8_t *inend,
-                      const uint8_t *inbuf, char *buf, size_t bufsize) {
+enum class DNSResponseCode : uint8_t {
+    OK = 0,
+    FORMAT_ERROR = 1,
+    SERVER_FAILURE = 2,
+    NAME_ERROR = 3,
+    NOT_IMPLEMENTED = 4,
+    REFUSED = 5,
+};
+
+ParseNameStatus parse_name(const uint8_t **inpos, const uint8_t *inend,
+                           const uint8_t *inbuf, char *buf, size_t bufsize) {
+    if (bufsize == 0) {
+        return ParseNameStatus::OutputBufferError;
+    }
     size_t bufused = 0;
     int init = 1;
     do {
-        if (*inpos == inend) return -1;
+        if (*inpos == inend) {
+            return ParseNameStatus::InputError;
+        }
         // read length of next component
         int octet = *((*inpos)++);
         if (octet == 0) {
             buf[bufused] = 0;
-            return 0;
+            return ParseNameStatus::OK;
         }
         // add dot in output
         if (!init) {
-            if (bufused == bufsize - 1) return -2;
+            if (bufused == bufsize - 1) {
+                return ParseNameStatus::OutputBufferError;
+            }
             buf[bufused++] = '.';
-        } else
+        } else {
             init = 0;
+        }
         // handle references
         if ((octet & 0xC0) == 0xC0) {
-            if (*inpos == inend) return -1;
+            if (*inpos == inend) {
+                return ParseNameStatus::InputError;
+            }
             int ref = ((octet - 0xC0) << 8) + *((*inpos)++);
-            if (ref < 0 || ref >= (*inpos) - inbuf - 2) return -1;
+            if (ref < 0 || ref >= (*inpos) - inbuf - 2) {
+                return ParseNameStatus::InputError;
+            }
             const uint8_t *newbuf = inbuf + ref;
             return parse_name(&newbuf, (*inpos) - 2, inbuf, buf + bufused,
                               bufsize - bufused);
         }
-        if (octet > 63) return -1;
+        if (octet > MAX_LABEL_LENGTH) {
+            return ParseNameStatus::InputError;
+        }
+        // The maximum size of a query name is 255. The buffer must have
+        // room for the null-character at the end of the buffer after writing
+        // the label.
+        if (octet + bufused > MAX_QUERY_NAME_LENGTH) {
+            return ParseNameStatus::InputError;
+        }
         // copy label
         while (octet) {
-            if (*inpos == inend) return -1;
-            if (bufused == bufsize - 1) return -2;
+            if (*inpos == inend) {
+                return ParseNameStatus::InputError;
+            }
+            if (bufused == bufsize - 1) {
+                return ParseNameStatus::OutputBufferError;
+            }
             int c = *((*inpos)++);
-            if (c == '.') return -1;
+            if (c == '.') {
+                return ParseNameStatus::InputError;
+            }
             octet--;
             buf[bufused++] = c;
         }
     } while (1);
 }
 
-//  0: k
-// -1: component > 63 characters
-// -2: insufficent space in output
-// -3: two subsequent dots
-static int write_name(uint8_t **outpos, const uint8_t *outend, const char *name,
-                      int offset) {
+int write_name(uint8_t **outpos, const uint8_t *outend, const char *name,
+               int offset) {
     while (*name != 0) {
         const char *dot = strchr(name, '.');
         const char *fin = dot;
-        if (!dot) fin = name + strlen(name);
-        if (fin - name > 63) return -1;
-        if (fin == name) return -3;
-        if (outend - *outpos < fin - name + 2) return -2;
+        if (!dot) {
+            fin = name + strlen(name);
+        }
+        if (fin - name > MAX_LABEL_LENGTH) {
+            return -1;
+        }
+        if (fin == name) {
+            return -3;
+        }
+        if (outend - *outpos < fin - name + 2) {
+            return -2;
+        }
         *((*outpos)++) = fin - name;
         memcpy(*outpos, name, fin - name);
         *outpos += fin - name;
-        if (!dot) break;
+        if (!dot) {
+            break;
+        }
         name = dot + 1;
     }
     if (offset < 0) {
         // no reference
-        if (outend == *outpos) return -2;
+        if (outend == *outpos) {
+            return -2;
+        }
         *((*outpos)++) = 0;
     } else {
-        if (outend - *outpos < 2) return -2;
+        if (outend - *outpos < 2) {
+            return -2;
+        }
         *((*outpos)++) = (offset >> 8) | 0xC0;
         *((*outpos)++) = offset & 0xFF;
     }
@@ -156,11 +204,15 @@ error:
 static int write_record_a(uint8_t **outpos, const uint8_t *outend,
                           const char *name, int offset, dns_class cls, int ttl,
                           const addr_t *ip) {
-    if (ip->v != 4) return -6;
+    if (ip->v != 4) {
+        return -6;
+    }
     uint8_t *oldpos = *outpos;
     int error = 0;
     int ret = write_record(outpos, outend, name, offset, TYPE_A, cls, ttl);
-    if (ret) return ret;
+    if (ret) {
+        return ret;
+    }
     if (outend - *outpos < 6) {
         error = -5;
         goto error;
@@ -169,8 +221,9 @@ static int write_record_a(uint8_t **outpos, const uint8_t *outend,
     *((*outpos)++) = 0;
     *((*outpos)++) = 4;
     // rdata
-    for (int i = 0; i < 4; i++)
+    for (int i = 0; i < 4; i++) {
         *((*outpos)++) = ip->data.v4[i];
+    }
     return 0;
 error:
     *outpos = oldpos;
@@ -180,11 +233,15 @@ error:
 static int write_record_aaaa(uint8_t **outpos, const uint8_t *outend,
                              const char *name, int offset, dns_class cls,
                              int ttl, const addr_t *ip) {
-    if (ip->v != 6) return -6;
+    if (ip->v != 6) {
+        return -6;
+    }
     uint8_t *oldpos = *outpos;
     int error = 0;
     int ret = write_record(outpos, outend, name, offset, TYPE_AAAA, cls, ttl);
-    if (ret) return ret;
+    if (ret) {
+        return ret;
+    }
     if (outend - *outpos < 6) {
         error = -5;
         goto error;
@@ -193,8 +250,9 @@ static int write_record_aaaa(uint8_t **outpos, const uint8_t *outend,
     *((*outpos)++) = 0;
     *((*outpos)++) = 16;
     // rdata
-    for (int i = 0; i < 16; i++)
+    for (int i = 0; i < 16; i++) {
         *((*outpos)++) = ip->data.v6[i];
+    }
     return 0;
 error:
     *outpos = oldpos;
@@ -306,7 +364,7 @@ error:
 
 static ssize_t dnshandle(dns_opt_t *opt, const uint8_t *inbuf, size_t insize,
                          uint8_t *outbuf) {
-    int error = 0;
+    DNSResponseCode responseCode = DNSResponseCode::OK;
     if (insize < 12) {
         // DNS header
         return -1;
@@ -323,19 +381,19 @@ static ssize_t dnshandle(dns_opt_t *opt, const uint8_t *inbuf, size_t insize,
     // copy flags;
     outbuf[2] = inbuf[2];
     outbuf[3] = inbuf[3];
-    // clear error
+    // clear response code
     outbuf[3] &= ~15;
     // check qr
     if (inbuf[2] & 128) {
-        /* printf("Got response?\n"); */
-        error = 1;
+        /* tfm::format(std::cout, "Got response?\n"); */
+        responseCode = DNSResponseCode::FORMAT_ERROR;
         goto error;
     }
 
     // check opcode
     if (((inbuf[2] & 120) >> 3) != 0) {
-        /* printf("Opcode nonzero?\n"); */
-        error = 4;
+        /* tfm::format(std::cout, "Opcode nonzero?\n"); */
+        responseCode = DNSResponseCode::NOT_IMPLEMENTED;
         goto error;
     }
 
@@ -346,30 +404,31 @@ static ssize_t dnshandle(dns_opt_t *opt, const uint8_t *inbuf, size_t insize,
     // check questions
     nquestion = (inbuf[4] << 8) + inbuf[5];
     if (nquestion == 0) {
-        /* printf("No questions?\n"); */
-        error = 0;
+        /* tfm::format(std::cout, "No questions?\n"); */
+        responseCode = DNSResponseCode::OK;
         goto error;
     }
 
     if (nquestion > 1) {
-        /* printf("Multiple questions %i?\n", nquestion); */
-        error = 4;
+        /* tfm::format(std::cout, "Multiple questions %i?\n", nquestion); */
+        responseCode = DNSResponseCode::NOT_IMPLEMENTED;
         goto error;
     }
 
     {
         const uint8_t *inpos = inbuf + 12;
         const uint8_t *inend = inbuf + insize;
-        char name[256];
+        char name[MAX_QUERY_NAME_BUFFER_LENGTH];
         int offset = inpos - inbuf;
-        int ret = parse_name(&inpos, inend, inbuf, name, 256);
-        if (ret == -1) {
-            error = 1;
+        ParseNameStatus ret = parse_name(&inpos, inend, inbuf, name,
+                                         MAX_QUERY_NAME_BUFFER_LENGTH);
+        if (ret == ParseNameStatus::InputError) {
+            responseCode = DNSResponseCode::FORMAT_ERROR;
             goto error;
         }
 
-        if (ret == -2) {
-            error = 5;
+        if (ret == ParseNameStatus::OutputBufferError) {
+            responseCode = DNSResponseCode::REFUSED;
             goto error;
         }
 
@@ -377,12 +436,12 @@ static ssize_t dnshandle(dns_opt_t *opt, const uint8_t *inbuf, size_t insize,
         if (strcasecmp(name, opt->host) &&
             (namel < hostl + 2 || name[namel - hostl - 1] != '.' ||
              strcasecmp(name + namel - hostl, opt->host))) {
-            error = 5;
+            responseCode = DNSResponseCode::REFUSED;
             goto error;
         }
 
         if (inend - inpos < 4) {
-            error = 1;
+            responseCode = DNSResponseCode::FORMAT_ERROR;
             goto error;
         }
 
@@ -407,8 +466,8 @@ static ssize_t dnshandle(dns_opt_t *opt, const uint8_t *inbuf, size_t insize,
         uint8_t *outpos = outbuf + (inpos - inbuf);
         uint8_t *outend = outbuf + BUFLEN;
 
-        //   printf("DNS: Request host='%s' type=%i class=%i\n", name, typ,
-        //   cls);
+        //   tfm::format(std::cout, "DNS: Request host='%s' type=%i class=%i\n",
+        //   name, typ, cls);
 
         // calculate max size of authority section
 
@@ -423,10 +482,11 @@ static ssize_t dnshandle(dns_opt_t *opt, const uint8_t *inbuf, size_t insize,
             write_record_soa(&newpos, outend, "", offset, CLASS_IN, opt->nsttl,
                              opt->ns, opt->mbox, time(NULL), 604800, 86400,
                              2592000, 604800);
-            if (max_auth_size < newpos - outpos)
+            if (max_auth_size < newpos - outpos) {
                 max_auth_size = newpos - outpos;
-            //    printf("Authority section will claim %i bytes max\n",
-            //    max_auth_size);
+            }
+            //    tfm::format(std::cout, "Authority section will claim %i bytes
+            //    max\n", max_auth_size);
         }
 
         // Answer section
@@ -436,7 +496,7 @@ static ssize_t dnshandle(dns_opt_t *opt, const uint8_t *inbuf, size_t insize,
             (cls == CLASS_IN || cls == QCLASS_ANY)) {
             int ret2 = write_record_ns(&outpos, outend - max_auth_size, "",
                                        offset, CLASS_IN, opt->nsttl, opt->ns);
-            //    printf("wrote NS record: %i\n", ret2);
+            //    tfm::format(std::cout, "wrote NS record: %i\n", ret2);
             if (!ret2) {
                 outbuf[7]++;
                 have_ns++;
@@ -450,7 +510,7 @@ static ssize_t dnshandle(dns_opt_t *opt, const uint8_t *inbuf, size_t insize,
                 write_record_soa(&outpos, outend - max_auth_size, "", offset,
                                  CLASS_IN, opt->nsttl, opt->ns, opt->mbox,
                                  time(NULL), 604800, 86400, 2592000, 604800);
-            //    printf("wrote SOA record: %i\n", ret2);
+            //    tfm::format(std::cout, "wrote SOA record: %i\n", ret2);
             if (!ret2) {
                 outbuf[7]++;
             }
@@ -476,7 +536,8 @@ static ssize_t dnshandle(dns_opt_t *opt, const uint8_t *inbuf, size_t insize,
                         opt->datattl, &addr[n]);
                 }
 
-                //      printf("wrote A record: %i\n", mustbreak);
+                //      tfm::format(std::cout, "wrote A record: %i\n",
+                //      mustbreak);
                 if (mustbreak) {
                     break;
                 }
@@ -490,7 +551,7 @@ static ssize_t dnshandle(dns_opt_t *opt, const uint8_t *inbuf, size_t insize,
         if (!have_ns && outbuf[7]) {
             int ret2 = write_record_ns(&outpos, outend, "", offset, CLASS_IN,
                                        opt->nsttl, opt->ns);
-            //    printf("wrote NS record: %i\n", ret2);
+            //    tfm::format(std::cout, "wrote NS record: %i\n", ret2);
             if (!ret2) {
                 outbuf[9]++;
             }
@@ -502,7 +563,7 @@ static ssize_t dnshandle(dns_opt_t *opt, const uint8_t *inbuf, size_t insize,
             int ret2 = write_record_soa(
                 &outpos, outend, "", offset, CLASS_IN, opt->nsttl, opt->ns,
                 opt->mbox, time(NULL), 604800, 86400, 2592000, 604800);
-            //    printf("wrote SOA record: %i\n", ret2);
+            //    tfm::format(std::cout, "wrote SOA record: %i\n", ret2);
             if (!ret2) {
                 outbuf[9]++;
             }
@@ -515,8 +576,8 @@ static ssize_t dnshandle(dns_opt_t *opt, const uint8_t *inbuf, size_t insize,
     }
 
 error:
-    // set error
-    outbuf[3] |= error & 0xF;
+    // set response code
+    outbuf[3] |= uint8_t(responseCode) & 0xF;
     // set counts
     outbuf[4] = 0;
     outbuf[5] = 0;
@@ -535,7 +596,9 @@ int dnsserver(dns_opt_t *opt) {
     struct sockaddr_in6 si_other;
     int senderSocket = -1;
     senderSocket = socket(AF_INET6, SOCK_DGRAM, IPPROTO_UDP);
-    if (senderSocket == -1) return -3;
+    if (senderSocket == -1) {
+        return -3;
+    }
 
     int replySocket;
     if (listenSocket == -1) {
@@ -556,8 +619,10 @@ int dnsserver(dns_opt_t *opt) {
         si_me.sin6_family = AF_INET6;
         si_me.sin6_port = htons(opt->port);
         si_me.sin6_addr = in6addr_any;
-        if (bind(listenSocket, (struct sockaddr *)&si_me, sizeof(si_me)) == -1)
+        if (bind(listenSocket, (struct sockaddr *)&si_me, sizeof(si_me)) ==
+            -1) {
             return -2;
+        }
     }
 
     uint8_t inbuf[BUFLEN], outbuf[BUFLEN];
@@ -580,13 +645,17 @@ int dnsserver(dns_opt_t *opt) {
     for (; 1; ++(opt->nRequests)) {
         ssize_t insize = recvmsg(listenSocket, &msg, 0);
         //    uint8_t *addr = (uint8_t*)&si_other.sin_addr.s_addr;
-        //    printf("DNS: Request %llu from %i.%i.%i.%i:%i of %i bytes\n",
-        //    (unsigned long long)(opt->nRequests), addr[0], addr[1], addr[2],
-        //    addr[3], ntohs(si_other.sin_port), (int)insize);
-        if (insize <= 0) continue;
+        //    tfm::format(std::cout, "DNS: Request %llu from %i.%i.%i.%i:%i of
+        //    %i bytes\n", (unsigned long long)(opt->nRequests), addr[0],
+        //    addr[1], addr[2], addr[3], ntohs(si_other.sin_port), (int)insize);
+        if (insize <= 0) {
+            continue;
+        }
 
         ssize_t ret = dnshandle(opt, inbuf, insize, outbuf);
-        if (ret <= 0) continue;
+        if (ret <= 0) {
+            continue;
+        }
 
         bool handled = false;
         for (struct cmsghdr *hdr = CMSG_FIRSTHDR(&msg); hdr;
@@ -601,9 +670,10 @@ int dnsserver(dns_opt_t *opt) {
                 handled = true;
             }
         }
-        if (!handled)
+        if (!handled) {
             sendto(listenSocket, outbuf, ret, 0, (struct sockaddr *)&si_other,
                    sizeof(si_other));
+        }
     }
     return 0;
 }

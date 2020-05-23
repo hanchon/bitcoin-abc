@@ -2,23 +2,26 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#include "core_io.h"
+#include <core_io.h>
 
-#include "primitives/block.h"
-#include "primitives/transaction.h"
-#include "script/script.h"
-#include "serialize.h"
-#include "streams.h"
-#include "util.h"
-#include "utilstrencodings.h"
-#include "version.h"
+#include <primitives/block.h>
+#include <primitives/transaction.h>
+#include <psbt.h>
+#include <script/script.h>
+#include <script/sign.h>
+#include <serialize.h>
+#include <streams.h>
+#include <util/strencodings.h>
+#include <util/system.h>
+#include <version.h>
 
 #include <univalue.h>
 
 #include <boost/algorithm/string/classification.hpp>
-#include <boost/algorithm/string/predicate.hpp>
 #include <boost/algorithm/string/replace.hpp>
 #include <boost/algorithm/string/split.hpp>
+
+#include <algorithm>
 
 CScript ParseScript(const std::string &s) {
     CScript result;
@@ -68,10 +71,9 @@ CScript ParseScript(const std::string &s) {
         next_push_size = 0;
 
         // Decimal numbers
-        if (all(w, boost::algorithm::is_digit()) ||
-            (boost::algorithm::starts_with(w, "-") &&
-             all(std::string(w.begin() + 1, w.end()),
-                 boost::algorithm::is_digit()))) {
+        if (std::all_of(w.begin(), w.end(), ::IsDigit) ||
+            (w.front() == '-' && w.size() > 1 &&
+             std::all_of(w.begin() + 1, w.end(), ::IsDigit))) {
             // Number
             int64_t n = atoi64(w);
             result << n;
@@ -79,8 +81,7 @@ CScript ParseScript(const std::string &s) {
         }
 
         // Hex Data
-        if (boost::algorithm::starts_with(w, "0x") &&
-            (w.begin() + 2 != w.end())) {
+        if (w.substr(0, 2) == "0x" && w.size() > 2) {
             if (!IsHex(std::string(w.begin() + 2, w.end()))) {
                 // Should only arrive here for improperly formatted hex values
                 throw std::runtime_error("Hex numbers expected to be formatted "
@@ -96,8 +97,7 @@ CScript ParseScript(const std::string &s) {
             goto next;
         }
 
-        if (w.size() >= 2 && boost::algorithm::starts_with(w, "'") &&
-            boost::algorithm::ends_with(w, "'")) {
+        if (w.size() >= 2 && w.front() == '\'' && w.back() == '\'') {
             // Single-quoted string, pushed as data. NOTE: this is poor-man's
             // parsing, spaces/tabs/newlines in single-quoted strings won't
             // work.
@@ -189,13 +189,28 @@ bool DecodeHexTx(CMutableTransaction &tx, const std::string &strHexTx) {
     CDataStream ssData(txData, SER_NETWORK, PROTOCOL_VERSION);
     try {
         ssData >> tx;
-        if (!ssData.empty()) {
-            return false;
+        if (ssData.eof()) {
+            return true;
         }
-    } catch (const std::exception &) {
+    } catch (const std::exception &e) {
+        // Fall through.
+    }
+
+    return false;
+}
+
+bool DecodeHexBlockHeader(CBlockHeader &header, const std::string &hex_header) {
+    if (!IsHex(hex_header)) {
         return false;
     }
 
+    const std::vector<uint8_t> header_data{ParseHex(hex_header)};
+    CDataStream ser_header(header_data, SER_NETWORK, PROTOCOL_VERSION);
+    try {
+        ser_header >> header;
+    } catch (const std::exception &) {
+        return false;
+    }
     return true;
 }
 
@@ -215,26 +230,13 @@ bool DecodeHexBlk(CBlock &block, const std::string &strHexBlk) {
     return true;
 }
 
-uint256 ParseHashUV(const UniValue &v, const std::string &strName) {
-    std::string strHex;
-    if (v.isStr()) {
-        strHex = v.getValStr();
+bool ParseHashStr(const std::string &strHex, uint256 &result) {
+    if ((strHex.size() != 64) || !IsHex(strHex)) {
+        return false;
     }
 
-    // Note: ParseHashStr("") throws a runtime_error
-    return ParseHashStr(strHex, strName);
-}
-
-uint256 ParseHashStr(const std::string &strHex, const std::string &strName) {
-    if (!IsHex(strHex)) {
-        // Note: IsHex("") is false
-        throw std::runtime_error(
-            strName + " must be hexadecimal string (not '" + strHex + "')");
-    }
-
-    uint256 result;
     result.SetHex(strHex);
-    return result;
+    return true;
 }
 
 std::vector<uint8_t> ParseHexUV(const UniValue &v, const std::string &strName) {
@@ -249,4 +251,36 @@ std::vector<uint8_t> ParseHexUV(const UniValue &v, const std::string &strName) {
     }
 
     return ParseHex(strHex);
+}
+
+SigHashType ParseSighashString(const UniValue &sighash) {
+    SigHashType sigHashType = SigHashType().withForkId();
+    if (!sighash.isNull()) {
+        static std::map<std::string, int> map_sighash_values = {
+            {"ALL", SIGHASH_ALL},
+            {"ALL|ANYONECANPAY", SIGHASH_ALL | SIGHASH_ANYONECANPAY},
+            {"ALL|FORKID", SIGHASH_ALL | SIGHASH_FORKID},
+            {"ALL|FORKID|ANYONECANPAY",
+             SIGHASH_ALL | SIGHASH_FORKID | SIGHASH_ANYONECANPAY},
+            {"NONE", SIGHASH_NONE},
+            {"NONE|ANYONECANPAY", SIGHASH_NONE | SIGHASH_ANYONECANPAY},
+            {"NONE|FORKID", SIGHASH_NONE | SIGHASH_FORKID},
+            {"NONE|FORKID|ANYONECANPAY",
+             SIGHASH_NONE | SIGHASH_FORKID | SIGHASH_ANYONECANPAY},
+            {"SINGLE", SIGHASH_SINGLE},
+            {"SINGLE|ANYONECANPAY", SIGHASH_SINGLE | SIGHASH_ANYONECANPAY},
+            {"SINGLE|FORKID", SIGHASH_SINGLE | SIGHASH_FORKID},
+            {"SINGLE|FORKID|ANYONECANPAY",
+             SIGHASH_SINGLE | SIGHASH_FORKID | SIGHASH_ANYONECANPAY},
+        };
+        std::string strHashType = sighash.get_str();
+        const auto &it = map_sighash_values.find(strHashType);
+        if (it != map_sighash_values.end()) {
+            sigHashType = SigHashType(it->second);
+        } else {
+            throw std::runtime_error(strHashType +
+                                     " is not a valid sighash parameter.");
+        }
+    }
+    return sigHashType;
 }

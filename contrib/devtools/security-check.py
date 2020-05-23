@@ -1,5 +1,5 @@
-#!/usr/bin/env python
-# Copyright (c) 2015-2016 The Bitcoin Core developers
+#!/usr/bin/env python3
+# Copyright (c) 2015-2017 The Bitcoin Core developers
 # Distributed under the MIT software license, see the accompanying
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
 '''
@@ -8,7 +8,6 @@ Exit status will be 0 if successful, and the program will be silent.
 Otherwise the exit status will be 1 and it will log which executables failed which checks.
 Needs `readelf` (for ELF) and `objdump` (for PE).
 '''
-from __future__ import division, print_function, unicode_literals
 import subprocess
 import sys
 import os
@@ -16,7 +15,7 @@ import os
 READELF_CMD = os.getenv('READELF', '/usr/bin/readelf')
 OBJDUMP_CMD = os.getenv('OBJDUMP', '/usr/bin/objdump')
 # checks which are non-fatal for now but only generate a warning
-NONFATAL = {'HIGH_ENTROPY_VA'}
+NONFATAL = {}
 
 
 def check_ELF_PIE(executable):
@@ -106,7 +105,8 @@ def check_ELF_RELRO(executable):
         raise IOError('Error opening file')
     for line in stdout.splitlines():
         tokens = line.split()
-        if len(tokens) > 1 and tokens[1] == '(BIND_NOW)' or (len(tokens) > 2 and tokens[1] == '(FLAGS)' and 'BIND_NOW' in tokens[2]):
+        if len(tokens) > 1 and tokens[1] == '(BIND_NOW)' or (
+                len(tokens) > 2 and tokens[1] == '(FLAGS)' and 'BIND_NOW' in tokens[2:]):
             have_bindnow = True
     return have_gnu_relro and have_bindnow
 
@@ -133,7 +133,7 @@ def get_PE_dll_characteristics(executable):
     Returns a tuple (arch,bits) where arch is 'i386:x86-64' or 'i386'
     and bits is the DllCharacteristics value.
     '''
-    p = subprocess.Popen([OBJDUMP_CMD, '-x',  executable], stdout=subprocess.PIPE,
+    p = subprocess.Popen([OBJDUMP_CMD, '-x', executable], stdout=subprocess.PIPE,
                          stderr=subprocess.PIPE, stdin=subprocess.PIPE, universal_newlines=True)
     (stdout, stderr) = p.communicate()
     if p.returncode:
@@ -178,7 +178,8 @@ def check_PE_HIGH_ENTROPY_VA(executable):
 def check_PE_NX(executable):
     '''NX: DllCharacteristics bit 0x100 signifies nxcompat (DEP)'''
     (arch, bits) = get_PE_dll_characteristics(executable)
-    return (bits & IMAGE_DLL_CHARACTERISTICS_NX_COMPAT) == IMAGE_DLL_CHARACTERISTICS_NX_COMPAT
+    return (
+        bits & IMAGE_DLL_CHARACTERISTICS_NX_COMPAT) == IMAGE_DLL_CHARACTERISTICS_NX_COMPAT
 
 
 CHECKS = {

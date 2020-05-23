@@ -1,18 +1,19 @@
-// Copyright (c) 2018 The Bitcoin developers
+// Copyright (c) 2018-2019 The Bitcoin developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#include "reverse_iterator.h"
-#include "rwcollection.h"
+#include <rwcollection.h>
 
-#include "test/test_bitcoin.h"
+#include <reverse_iterator.h>
+
+#include <test/setup_common.h>
 
 #include <boost/test/unit_test.hpp>
 
 #include <set>
 #include <vector>
 
-BOOST_AUTO_TEST_SUITE(rwcollection_tests);
+BOOST_AUTO_TEST_SUITE(rwcollection_tests)
 
 BOOST_AUTO_TEST_CASE(vector) {
     RWCollection<std::vector<int>> rwvector;
@@ -115,7 +116,7 @@ BOOST_AUTO_TEST_CASE(map) {
         BOOST_CHECK_EQUAL(w["2"], "two");
         BOOST_CHECK_EQUAL(w["3"], "three");
 
-        for (const std::pair<std::string, std::string> &p : w) {
+        for (const std::pair<const std::string, std::string> &p : w) {
             BOOST_CHECK_EQUAL(w[p.first], p.second);
         }
     }
@@ -126,7 +127,7 @@ BOOST_AUTO_TEST_CASE(map) {
         BOOST_CHECK_EQUAL(r->find("1")->first, "1");
         BOOST_CHECK_EQUAL(r->find("1")->second, "one");
 
-        for (const std::pair<std::string, std::string> &p : r) {
+        for (const std::pair<const std::string, std::string> &p : r) {
             BOOST_CHECK_EQUAL(r->at(p.first), p.second);
         }
     }

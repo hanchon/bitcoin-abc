@@ -1,28 +1,28 @@
-// Copyright (c) 2017 The Bitcoin developers
+// Copyright (c) 2017-2020 The Bitcoin developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#include "config.h"
-#include "consensus/consensus.h"
-#include "rpc/server.h"
-#include "utilstrencodings.h"
-#include "validation.h"
+#include <config.h>
+#include <consensus/consensus.h>
+#include <rpc/server.h>
+#include <rpc/util.h>
+#include <util/strencodings.h>
+#include <validation.h>
 
 #include <univalue.h>
-
-#include <boost/lexical_cast.hpp>
 
 static UniValue getexcessiveblock(const Config &config,
                                   const JSONRPCRequest &request) {
     if (request.fHelp || request.params.size() != 0) {
-        throw std::runtime_error(
-            "getexcessiveblock\n"
-            "\nReturn the excessive block size."
-            "\nResult\n"
-            "  excessiveBlockSize (integer) block size in bytes\n"
-            "\nExamples:\n" +
-            HelpExampleCli("getexcessiveblock", "") +
-            HelpExampleRpc("getexcessiveblock", ""));
+        throw std::runtime_error(RPCHelpMan{
+            "getexcessiveblock",
+            "\nReturn the excessive block size.",
+            {},
+            RPCResult{"  excessiveBlockSize (integer) block size in bytes\n"},
+            RPCExamples{HelpExampleCli("getexcessiveblock", "") +
+                        HelpExampleRpc("getexcessiveblock", "")},
+        }
+                                     .ToString());
     }
 
     UniValue ret(UniValue::VOBJ);
@@ -33,31 +33,34 @@ static UniValue getexcessiveblock(const Config &config,
 static UniValue setexcessiveblock(Config &config,
                                   const JSONRPCRequest &request) {
     if (request.fHelp || request.params.size() != 1) {
-        throw std::runtime_error(
-            "setexcessiveblock blockSize\n"
+        throw std::runtime_error(RPCHelpMan{
+            "setexcessiveblock",
             "\nSet the excessive block size. Excessive blocks will not be used "
-            "in the active chain or relayed. This  discourages the propagation "
-            "of blocks that you consider excessively large."
-            "\nResult\n"
-            "  blockSize (integer) excessive block size in bytes\n"
-            "\nExamples:\n" +
-            HelpExampleCli("setexcessiveblock", "") +
-            HelpExampleRpc("setexcessiveblock", ""));
+            "in the active chain or relayed. This discourages the propagation "
+            "of blocks that you consider excessively large.",
+            {
+                {"blockSize", RPCArg::Type::NUM, RPCArg::Optional::NO,
+                 "Excessive block size in bytes.  Must be greater than " +
+                     std::to_string(LEGACY_MAX_BLOCK_SIZE) + "."},
+            },
+            RPCResult{"  blockSize (integer) excessive block size in bytes\n"},
+            RPCExamples{HelpExampleCli("setexcessiveblock", "25000000") +
+                        HelpExampleRpc("setexcessiveblock", "25000000")},
+        }
+                                     .ToString());
     }
 
-    uint64_t ebs = 0;
-    if (request.params[0].isNum()) {
-        ebs = request.params[0].get_int64();
-    } else {
-        std::string temp = request.params[0].get_str();
-        if (temp[0] == '-') {
-            boost::throw_exception(boost::bad_lexical_cast());
-        }
-        ebs = boost::lexical_cast<uint64_t>(temp);
+    if (!request.params[0].isNum()) {
+        throw JSONRPCError(
+            RPC_INVALID_PARAMETER,
+            std::string(
+                "Invalid parameter, excessiveblock must be an integer"));
     }
+
+    int64_t ebs = request.params[0].get_int64();
 
     // Do not allow maxBlockSize to be set below historic 1MB limit
-    if (ebs <= LEGACY_MAX_BLOCK_SIZE) {
+    if (ebs <= int64_t(LEGACY_MAX_BLOCK_SIZE)) {
         throw JSONRPCError(
             RPC_INVALID_PARAMETER,
             std::string(
@@ -77,7 +80,7 @@ static UniValue setexcessiveblock(Config &config,
 }
 
 // clang-format off
-static const ContextFreeRPCCommand commands[] = {
+static const CRPCCommand commands[] = {
     //  category            name                      actor (function)        argNames
     //  ------------------- ------------------------  ----------------------  ----------
     { "network",            "getexcessiveblock",      getexcessiveblock,      {}},

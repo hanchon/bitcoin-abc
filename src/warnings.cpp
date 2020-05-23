@@ -3,12 +3,14 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#include "warnings.h"
-#include "clientversion.h"
-#include "sync.h"
-#include "util.h"
+#include <warnings.h>
 
-CCriticalSection cs_warnings;
+#include <clientversion.h>
+#include <sync.h>
+#include <util/system.h>
+#include <util/translation.h>
+
+RecursiveMutex cs_warnings;
 std::string strMiscWarning;
 bool fLargeWorkForkFound = false;
 bool fLargeWorkInvalidChainFound = false;
@@ -35,7 +37,6 @@ void SetfLargeWorkInvalidChainFound(bool flag) {
 
 std::string GetWarnings(const std::string &strFor) {
     std::string strStatusBar;
-    std::string strRPC;
     std::string strGUI;
     const std::string uiAlertSeperator = "<hr />";
 
@@ -45,11 +46,9 @@ std::string GetWarnings(const std::string &strFor) {
         strStatusBar = "This is a pre-release test build - use at your own "
                        "risk - do not use for mining or merchant applications";
         strGUI = _("This is a pre-release test build - use at your own risk - "
-                   "do not use for mining or merchant applications");
+                   "do not use for mining or merchant applications")
+                     .translated;
     }
-
-    if (gArgs.GetBoolArg("-testsafemode", DEFAULT_TESTSAFEMODE))
-        strStatusBar = strRPC = strGUI = "testsafemode enabled";
 
     // Misc warnings like out of disk space and clock is wrong
     if (strMiscWarning != "") {
@@ -58,28 +57,28 @@ std::string GetWarnings(const std::string &strFor) {
     }
 
     if (fLargeWorkForkFound) {
-        strStatusBar = strRPC = "Warning: The network does not appear to fully "
-                                "agree! Some miners appear to be experiencing "
-                                "issues.";
+        strStatusBar = "Warning: The network does not appear to fully agree! "
+                       "Some miners appear to be experiencing issues.";
         strGUI += (strGUI.empty() ? "" : uiAlertSeperator) +
                   _("Warning: The network does not appear to fully agree! Some "
-                    "miners appear to be experiencing issues.");
+                    "miners appear to be experiencing issues.")
+                      .translated;
     } else if (fLargeWorkInvalidChainFound) {
-        strStatusBar = strRPC = "Warning: We do not appear to fully agree with "
-                                "our peers! You may need to upgrade, or other "
-                                "nodes may need to upgrade.";
+        strStatusBar = "Warning: We do not appear to fully agree with our "
+                       "peers! You may need to upgrade, or other nodes may "
+                       "need to upgrade.";
         strGUI +=
             (strGUI.empty() ? "" : uiAlertSeperator) +
             _("Warning: We do not appear to fully agree with our peers! You "
-              "may need to upgrade, or other nodes may need to upgrade.");
+              "may need to upgrade, or other nodes may need to upgrade.")
+                .translated;
     }
 
-    if (strFor == "gui")
+    if (strFor == "gui") {
         return strGUI;
-    else if (strFor == "statusbar")
+    } else if (strFor == "statusbar") {
         return strStatusBar;
-    else if (strFor == "rpc")
-        return strRPC;
+    }
     assert(!"GetWarnings(): invalid parameter");
     return "error";
 }

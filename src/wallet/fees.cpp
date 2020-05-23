@@ -3,51 +3,54 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#include "wallet/fees.h"
+#include <wallet/fees.h>
 
-#include "config.h"
-#include "policy/policy.h"
-#include "txmempool.h"
-#include "util.h"
-#include "validation.h"
-#include "wallet/coincontrol.h"
-#include "wallet/wallet.h"
+#include <config.h>
+#include <policy/policy.h>
+#include <txmempool.h>
+#include <util/system.h>
+#include <validation.h>
+#include <wallet/coincontrol.h>
+#include <wallet/wallet.h>
 
-Amount GetMinimumFee(unsigned int nTxBytes, const CTxMemPool &pool,
-                     Amount targetFee) {
-    Amount nFeeNeeded = targetFee;
-    if (nFeeNeeded == Amount::zero()) {
-        nFeeNeeded = pool.estimateFee().GetFeeCeiling(nTxBytes);
-        // ... unless we don't have enough mempool data for estimatefee, then
-        // use fallbackFee.
-        if (nFeeNeeded == Amount::zero()) {
-            nFeeNeeded = CWallet::fallbackFee.GetFeeCeiling(nTxBytes);
-        }
-    }
+Amount GetRequiredFee(const CWallet &wallet, unsigned int nTxBytes) {
+    return GetRequiredFeeRate(wallet).GetFeeCeiling(nTxBytes);
+}
 
-    // Prevent user from paying a fee below minRelayTxFee or minTxFee.
-    nFeeNeeded =
-        std::max(nFeeNeeded, GetConfig().GetMinFeePerKB().GetFee(nTxBytes));
+Amount GetMinimumFee(const CWallet &wallet, unsigned int nTxBytes,
+                     const CCoinControl &coin_control) {
+    Amount nFeeNeeded =
+        GetMinimumFeeRate(wallet, coin_control).GetFeeCeiling(nTxBytes);
 
     // But always obey the maximum.
-    if (nFeeNeeded > maxTxFee) {
-        nFeeNeeded = maxTxFee;
+    const Amount max_tx_fee = wallet.chain().maxTxFee();
+    if (nFeeNeeded > max_tx_fee) {
+        nFeeNeeded = max_tx_fee;
     }
 
     return nFeeNeeded;
 }
 
-Amount GetMinimumFee(unsigned int nTxBytes, const CTxMemPool &pool) {
-    // payTxFee is the user-set global for desired feerate.
-    return GetMinimumFee(nTxBytes, pool, payTxFee.GetFeeCeiling(nTxBytes));
+CFeeRate GetRequiredFeeRate(const CWallet &wallet) {
+    return std::max(wallet.m_min_fee, wallet.chain().relayMinFee());
 }
 
-Amount GetMinimumFee(unsigned int nTxBytes, const CTxMemPool &pool,
-                     const CCoinControl &coinControl) {
-    if (coinControl.fOverrideFeeRate && coinControl.m_feerate) {
-        return GetMinimumFee(nTxBytes, pool,
-                             coinControl.m_feerate->GetFee(nTxBytes));
-    } else {
-        return GetMinimumFee(nTxBytes, pool);
+CFeeRate GetMinimumFeeRate(const CWallet &wallet,
+                           const CCoinControl &coin_control) {
+    CFeeRate neededFeeRate =
+        (coin_control.fOverrideFeeRate && coin_control.m_feerate)
+            ? *coin_control.m_feerate
+            : wallet.m_pay_tx_fee;
+
+    if (neededFeeRate == CFeeRate()) {
+        neededFeeRate = wallet.chain().estimateFee();
+        // ... unless we don't have enough mempool data for estimatefee, then
+        // use fallback fee.
+        if (neededFeeRate == CFeeRate()) {
+            neededFeeRate = wallet.m_fallback_fee;
+        }
     }
+
+    // Prevent user from paying a fee below minRelayTxFee or minTxFee.
+    return std::max(neededFeeRate, GetRequiredFeeRate(wallet));
 }

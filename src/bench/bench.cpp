@@ -1,9 +1,13 @@
-// Copyright (c) 2015-2016 The Bitcoin Core developers
+// Copyright (c) 2015-2019 The Bitcoin Core developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#include "bench.h"
-#include "perf.h"
+#include <bench/bench.h>
+
+#include <chainparams.h>
+#include <validation.h>
+
+#include <test/setup_common.h>
 
 #include <algorithm>
 #include <cassert>
@@ -81,6 +85,39 @@ void benchmark::PlotlyPrinter::footer() {
               << "</script></body></html>";
 }
 
+void benchmark::JunitPrinter::header() {
+    std::cout << "<?xml version='1.0' encoding='UTF-8'?>" << std::endl;
+}
+
+void benchmark::JunitPrinter::result(const State &state) {
+    auto results = state.m_elapsed_results;
+    double bench_duration =
+        state.m_num_iters *
+        std::accumulate(results.begin(), results.end(), 0.0);
+
+    /*
+     * Don't print the results now, we need them all to build the <testsuite>
+     * node.
+     */
+    bench_results.emplace_back(std::move(state.m_name), bench_duration);
+    total_duration += bench_duration;
+}
+
+void benchmark::JunitPrinter::footer() {
+    std::cout << std::setprecision(6);
+    std::cout << "<testsuite tests=\"" << bench_results.size() << "\" time=\""
+              << total_duration
+              << "\" name=\"Bitcoin ABC benchmarks\" id=\"0\">" << std::endl;
+
+    for (const auto &result : bench_results) {
+        std::cout << "<testcase classname=\"" << result.first << "\" name=\""
+                  << result.first << "\" time=\"" << result.second
+                  << "\"></testcase>" << std::endl;
+    }
+
+    std::cout << "</testsuite>" << std::endl;
+}
+
 benchmark::BenchRunner::BenchmarkMap &benchmark::BenchRunner::benchmarks() {
     static std::map<std::string, Bench> benchmarks_map;
     return benchmarks_map;
@@ -96,11 +133,14 @@ benchmark::BenchRunner::BenchRunner(std::string name,
 void benchmark::BenchRunner::RunAll(Printer &printer, uint64_t num_evals,
                                     double scaling, const std::string &filter,
                                     bool is_list_only) {
-    perf_init();
     if (!std::ratio_less_equal<benchmark::clock::period, std::micro>::value) {
         std::cerr << "WARNING: Clock precision is worse than microsecond - "
                      "benchmarks may be less accurate!\n";
     }
+#ifdef DEBUG
+    std::cerr << "WARNING: This is a debug build - may result in slower "
+                 "benchmarks.\n";
+#endif
 
     std::regex reFilter(filter);
     std::smatch baseMatch;
@@ -108,6 +148,9 @@ void benchmark::BenchRunner::RunAll(Printer &printer, uint64_t num_evals,
     printer.header();
 
     for (const auto &p : benchmarks()) {
+        TestingSetup test{CBaseChainParams::REGTEST};
+        assert(::ChainActive().Height() == 0);
+
         if (!std::regex_match(p.first, baseMatch, reFilter)) {
             continue;
         }
@@ -125,8 +168,6 @@ void benchmark::BenchRunner::RunAll(Printer &printer, uint64_t num_evals,
     }
 
     printer.footer();
-
-    perf_fini();
 }
 
 bool benchmark::State::UpdateTimer(const benchmark::time_point current_time) {

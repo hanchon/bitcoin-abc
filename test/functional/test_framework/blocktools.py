@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright (c) 2015-2016 The Bitcoin Core developers
+# Copyright (c) 2015-2019 The Bitcoin Core developers
 # Distributed under the MIT software license, see the accompanying
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
 """Utilities for manipulating blocks and transactions."""
@@ -10,7 +10,6 @@ from .script import (
     OP_DUP,
     OP_EQUALVERIFY,
     OP_HASH160,
-    OP_PUSHDATA2,
     OP_RETURN,
     OP_TRUE,
 )
@@ -26,12 +25,14 @@ from .messages import (
     ser_string,
 )
 from .txtools import pad_tx
-from .util import satoshi_round
+from .util import assert_equal, satoshi_round
 
-# Create a block (with regtest difficulty)
+# Genesis block time (regtest)
+TIME_GENESIS_BLOCK = 1296688602
 
 
 def create_block(hashprev, coinbase, nTime=None):
+    """Create a block (with regtest difficulty)."""
     block = CBlock()
     if nTime is None:
         import time
@@ -48,7 +49,6 @@ def create_block(hashprev, coinbase, nTime=None):
 
 def make_conform_to_ctor(block):
     for tx in block.vtx:
-        pad_tx(tx)
         tx.rehash()
     block.vtx = [block.vtx[0]] + \
         sorted(block.vtx[1:], key=lambda tx: tx.get_id())
@@ -82,7 +82,7 @@ def create_coinbase(height, pubkey=None):
     coinbaseoutput.nValue = 50 * COIN
     halvings = int(height / 150)  # regtest
     coinbaseoutput.nValue >>= halvings
-    if (pubkey != None):
+    if (pubkey is not None):
         coinbaseoutput.scriptPubKey = CScript([pubkey, OP_CHECKSIG])
     else:
         coinbaseoutput.scriptPubKey = CScript([OP_TRUE])
@@ -94,18 +94,46 @@ def create_coinbase(height, pubkey=None):
     coinbase.calc_sha256()
     return coinbase
 
-# Create a transaction.
-# If the scriptPubKey is not specified, make it anyone-can-spend.
 
+def create_tx_with_script(prevtx, n, script_sig=b"",
+                          amount=1, script_pub_key=CScript()):
+    """Return one-input, one-output transaction object
+       spending the prevtx's n-th output with the given amount.
 
-def create_transaction(prevtx, n, sig, value, scriptPubKey=CScript()):
+       Can optionally pass scriptPubKey and scriptSig, default is anyone-can-spend output.
+    """
     tx = CTransaction()
     assert(n < len(prevtx.vout))
-    tx.vin.append(CTxIn(COutPoint(prevtx.sha256, n), sig, 0xffffffff))
-    tx.vout.append(CTxOut(value, scriptPubKey))
+    tx.vin.append(CTxIn(COutPoint(prevtx.sha256, n), script_sig, 0xffffffff))
+    tx.vout.append(CTxOut(amount, script_pub_key))
     pad_tx(tx)
     tx.calc_sha256()
     return tx
+
+
+def create_transaction(node, txid, to_address, amount):
+    """ Return signed transaction spending the first output of the
+        input txid. Note that the node must be able to sign for the
+        output that is being spent, and the node must not be running
+        multiple wallets.
+    """
+    raw_tx = create_raw_transaction(node, txid, to_address, amount)
+    tx = FromHex(CTransaction(), raw_tx)
+    return tx
+
+
+def create_raw_transaction(node, txid, to_address, amount):
+    """ Return raw signed transaction spending the first output of the
+        input txid. Note that the node must be able to sign for the
+        output that is being spent, and the node must not be running
+        multiple wallets.
+    """
+    inputs = [{"txid": txid, "vout": 0}]
+    outputs = {to_address: amount}
+    rawtx = node.createrawtransaction(inputs, outputs)
+    signresult = node.signrawtransactionwithwallet(rawtx)
+    assert_equal(signresult["complete"], True)
+    return signresult['hex']
 
 
 def get_legacy_sigopcount_block(block, fAccurate=True):
@@ -120,7 +148,8 @@ def get_legacy_sigopcount_tx(tx, fAccurate=True):
     for i in tx.vout:
         count += i.scriptPubKey.GetSigOpCount(fAccurate)
     for j in tx.vin:
-        # scriptSig might be of type bytes, so convert to CScript for the moment
+        # scriptSig might be of type bytes, so convert to CScript for the
+        # moment
         count += CScript(j.scriptSig).GetSigOpCount(fAccurate)
     return count
 
@@ -160,7 +189,7 @@ def create_confirmed_utxos(node, count, age=101):
         node.generate(1)
 
     utxos = node.listunspent()
-    assert(len(utxos) >= count)
+    assert len(utxos) >= count
     return utxos
 
 
@@ -179,7 +208,7 @@ def mine_big_block(node, utxos=None):
 def send_big_transactions(node, utxos, num, fee_multiplier):
     from .cashaddr import decode
     txids = []
-    padding = "1"*(512*127)
+    padding = "1" * 512
     addrHash = decode(node.getnewaddress())[2]
 
     for _ in range(num):
@@ -187,13 +216,14 @@ def send_big_transactions(node, utxos, num, fee_multiplier):
         utxo = utxos.pop()
         txid = int(utxo['txid'], 16)
         ctx.vin.append(CTxIn(COutPoint(txid, int(utxo["vout"])), b""))
-        ctx.vout.append(CTxOut(0, CScript(
-            [OP_RETURN, OP_PUSHDATA2, len(padding), bytes(padding, 'utf-8')])))
         ctx.vout.append(
-            CTxOut(int(satoshi_round(utxo['amount']*COIN)),
+            CTxOut(int(satoshi_round(utxo['amount'] * COIN)),
                    CScript([OP_DUP, OP_HASH160, addrHash, OP_EQUALVERIFY, OP_CHECKSIG])))
+        for i in range(0, 127):
+            ctx.vout.append(CTxOut(0, CScript(
+                [OP_RETURN, bytes(padding, 'utf-8')])))
         # Create a proper fee for the transaction to be mined
-        ctx.vout[1].nValue -= int(fee_multiplier * node.calculate_fee(ctx))
+        ctx.vout[0].nValue -= int(fee_multiplier * node.calculate_fee(ctx))
         signresult = node.signrawtransactionwithwallet(
             ToHex(ctx), None, "NONE|FORKID")
         txid = node.sendrawtransaction(signresult["hex"], True)

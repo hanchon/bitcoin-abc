@@ -1,21 +1,24 @@
-// Copyright (c) 2012-2016 The Bitcoin Core developers
-// Copyright (c) 2017-2018 The Bitcoin developers
+// Copyright (c) 2012-2019 The Bitcoin Core developers
+// Copyright (c) 2017-2019 The Bitcoin developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
-#include "addrman.h"
-#include "chainparams.h"
-#include "clientversion.h"
-#include "config.h"
-#include "hash.h"
-#include "net.h"
-#include "netbase.h"
-#include "serialize.h"
-#include "streams.h"
-#include "test/test_bitcoin.h"
+#include <net.h>
 
-#include <string>
+#include <addrdb.h>
+#include <addrman.h>
+#include <chainparams.h>
+#include <clientversion.h>
+#include <config.h>
+#include <netbase.h>
+#include <serialize.h>
+#include <streams.h>
+
+#include <test/setup_common.h>
 
 #include <boost/test/unit_test.hpp>
+
+#include <memory>
+#include <string>
 
 class CAddrManSerializationMock : public CAddrMan {
 public:
@@ -70,9 +73,9 @@ private:
     uint64_t nMaxBlockSize;
 };
 
-CDataStream AddrmanToStream(CAddrManSerializationMock &_addrman) {
+static CDataStream AddrmanToStream(CAddrManSerializationMock &_addrman) {
     CDataStream ssPeersIn(SER_DISK, CLIENT_VERSION);
-    ssPeersIn << FLATDATA(Params().DiskMagic());
+    ssPeersIn << Params().DiskMagic();
     ssPeersIn << _addrman;
     std::string str = ssPeersIn.str();
     std::vector<uint8_t> vchData(str.begin(), str.end());
@@ -80,6 +83,17 @@ CDataStream AddrmanToStream(CAddrManSerializationMock &_addrman) {
 }
 
 BOOST_FIXTURE_TEST_SUITE(net_tests, BasicTestingSetup)
+
+BOOST_AUTO_TEST_CASE(cnode_listen_port) {
+    // test default
+    unsigned short port = GetListenPort();
+    BOOST_CHECK(port == Params().GetDefaultPort());
+    // test set port
+    unsigned short altPort = 12345;
+    gArgs.SoftSetArg("-port", std::to_string(altPort));
+    port = GetListenPort();
+    BOOST_CHECK(port == altPort);
+}
 
 BOOST_AUTO_TEST_CASE(caddrdb_read) {
     CAddrManUncorrupted addrmanUncorrupted;
@@ -105,9 +119,9 @@ BOOST_AUTO_TEST_CASE(caddrdb_read) {
     BOOST_CHECK(addrman1.size() == 0);
     try {
         uint8_t pchMsgTmp[4];
-        ssPeers1 >> FLATDATA(pchMsgTmp);
+        ssPeers1 >> pchMsgTmp;
         ssPeers1 >> addrman1;
-    } catch (const std::exception &e) {
+    } catch (const std::exception &) {
         exceptionThrown = true;
     }
 
@@ -136,9 +150,9 @@ BOOST_AUTO_TEST_CASE(caddrdb_read_corrupted) {
     BOOST_CHECK(addrman1.size() == 0);
     try {
         uint8_t pchMsgTmp[4];
-        ssPeers1 >> FLATDATA(pchMsgTmp);
+        ssPeers1 >> pchMsgTmp;
         ssPeers1 >> addrman1;
-    } catch (const std::exception &e) {
+    } catch (const std::exception &) {
         exceptionThrown = true;
     }
     // Even through de-serialization failed addrman is not left in a clean
@@ -166,20 +180,20 @@ BOOST_AUTO_TEST_CASE(cnode_simple_test) {
     ipv4Addr.s_addr = 0xa0b0c001;
 
     CAddress addr = CAddress(CService(ipv4Addr, 7777), NODE_NETWORK);
-    std::string pszDest = "";
+    std::string pszDest;
     bool fInboundIn = false;
 
     // Test that fFeeler is false by default.
-    std::unique_ptr<CNode> pnode1(new CNode(id++, NODE_NETWORK, height, hSocket,
-                                            addr, 0, 0, CAddress(), pszDest,
-                                            fInboundIn));
+    auto pnode1 =
+        std::make_unique<CNode>(id++, NODE_NETWORK, height, hSocket, addr, 0, 0,
+                                CAddress(), pszDest, fInboundIn);
     BOOST_CHECK(pnode1->fInbound == false);
     BOOST_CHECK(pnode1->fFeeler == false);
 
     fInboundIn = true;
-    std::unique_ptr<CNode> pnode2(new CNode(id++, NODE_NETWORK, height, hSocket,
-                                            addr, 1, 1, CAddress(), pszDest,
-                                            fInboundIn));
+    auto pnode2 =
+        std::make_unique<CNode>(id++, NODE_NETWORK, height, hSocket, addr, 1, 1,
+                                CAddress(), pszDest, fInboundIn);
     BOOST_CHECK(pnode2->fInbound == true);
     BOOST_CHECK(pnode2->fFeeler == false);
 }
@@ -200,7 +214,7 @@ BOOST_AUTO_TEST_CASE(test_userAgent) {
 
     config.SetMaxBlockSize(8000000);
     const std::string uacomment = "A very nice comment";
-    gArgs.ForceSetMultiArg("-uacomment", uacomment);
+    gArgs.ForceSetMultiArg("-uacomment", {uacomment});
 
     const std::string versionMessage =
         "/Bitcoin ABC:" + std::to_string(CLIENT_VERSION_MAJOR) + "." +
@@ -208,6 +222,120 @@ BOOST_AUTO_TEST_CASE(test_userAgent) {
         std::to_string(CLIENT_VERSION_REVISION) + "(EB8.0; " + uacomment + ")/";
 
     BOOST_CHECK_EQUAL(userAgent(config), versionMessage);
+}
+
+BOOST_AUTO_TEST_CASE(LimitedAndReachable_Network) {
+    BOOST_CHECK_EQUAL(IsReachable(NET_IPV4), true);
+    BOOST_CHECK_EQUAL(IsReachable(NET_IPV6), true);
+    BOOST_CHECK_EQUAL(IsReachable(NET_ONION), true);
+
+    SetReachable(NET_IPV4, false);
+    SetReachable(NET_IPV6, false);
+    SetReachable(NET_ONION, false);
+
+    BOOST_CHECK_EQUAL(IsReachable(NET_IPV4), false);
+    BOOST_CHECK_EQUAL(IsReachable(NET_IPV6), false);
+    BOOST_CHECK_EQUAL(IsReachable(NET_ONION), false);
+
+    SetReachable(NET_IPV4, true);
+    SetReachable(NET_IPV6, true);
+    SetReachable(NET_ONION, true);
+
+    BOOST_CHECK_EQUAL(IsReachable(NET_IPV4), true);
+    BOOST_CHECK_EQUAL(IsReachable(NET_IPV6), true);
+    BOOST_CHECK_EQUAL(IsReachable(NET_ONION), true);
+}
+
+BOOST_AUTO_TEST_CASE(LimitedAndReachable_NetworkCaseUnroutableAndInternal) {
+    BOOST_CHECK_EQUAL(IsReachable(NET_UNROUTABLE), true);
+    BOOST_CHECK_EQUAL(IsReachable(NET_INTERNAL), true);
+
+    SetReachable(NET_UNROUTABLE, false);
+    SetReachable(NET_INTERNAL, false);
+
+    // Ignored for both networks
+    BOOST_CHECK_EQUAL(IsReachable(NET_UNROUTABLE), true);
+    BOOST_CHECK_EQUAL(IsReachable(NET_INTERNAL), true);
+}
+
+CNetAddr UtilBuildAddress(uint8_t p1, uint8_t p2, uint8_t p3, uint8_t p4) {
+    uint8_t ip[] = {p1, p2, p3, p4};
+
+    struct sockaddr_in sa;
+    // initialize the memory block
+    memset(&sa, 0, sizeof(sockaddr_in));
+    memcpy(&(sa.sin_addr), &ip, sizeof(ip));
+    return CNetAddr(sa.sin_addr);
+}
+
+BOOST_AUTO_TEST_CASE(LimitedAndReachable_CNetAddr) {
+    // 1.1.1.1
+    CNetAddr addr = UtilBuildAddress(0x001, 0x001, 0x001, 0x001);
+
+    SetReachable(NET_IPV4, true);
+    BOOST_CHECK_EQUAL(IsReachable(addr), true);
+
+    SetReachable(NET_IPV4, false);
+    BOOST_CHECK_EQUAL(IsReachable(addr), false);
+
+    // have to reset this, because this is stateful.
+    SetReachable(NET_IPV4, true);
+}
+
+BOOST_AUTO_TEST_CASE(LocalAddress_BasicLifecycle) {
+    // 2.1.1.1:1000
+    CService addr =
+        CService(UtilBuildAddress(0x002, 0x001, 0x001, 0x001), 1000);
+
+    SetReachable(NET_IPV4, true);
+
+    BOOST_CHECK_EQUAL(IsLocal(addr), false);
+    BOOST_CHECK_EQUAL(AddLocal(addr, 1000), true);
+    BOOST_CHECK_EQUAL(IsLocal(addr), true);
+
+    RemoveLocal(addr);
+    BOOST_CHECK_EQUAL(IsLocal(addr), false);
+}
+
+// prior to PR #14728, this test triggers an undefined behavior
+BOOST_AUTO_TEST_CASE(ipv4_peer_with_ipv6_addrMe_test) {
+    // set up local addresses; all that's necessary to reproduce the bug is
+    // that a normal IPv4 address is among the entries, but if this address is
+    // !IsRoutable the undefined behavior is easier to trigger deterministically
+    {
+        LOCK(cs_mapLocalHost);
+        in_addr ipv4AddrLocal;
+        ipv4AddrLocal.s_addr = 0x0100007f;
+        CNetAddr addr = CNetAddr(ipv4AddrLocal);
+        LocalServiceInfo lsi;
+        lsi.nScore = 23;
+        lsi.nPort = 42;
+        mapLocalHost[addr] = lsi;
+    }
+
+    // create a peer with an IPv4 address
+    in_addr ipv4AddrPeer;
+    ipv4AddrPeer.s_addr = 0xa0b0c001;
+    CAddress addr = CAddress(CService(ipv4AddrPeer, 7777), NODE_NETWORK);
+    std::unique_ptr<CNode> pnode =
+        std::make_unique<CNode>(0, NODE_NETWORK, 0, INVALID_SOCKET, addr, 0, 0,
+                                CAddress{}, std::string{}, false);
+    pnode->fSuccessfullyConnected.store(true);
+
+    // the peer claims to be reaching us via IPv6
+    in6_addr ipv6AddrLocal;
+    memset(ipv6AddrLocal.s6_addr, 0, 16);
+    ipv6AddrLocal.s6_addr[0] = 0xcc;
+    CAddress addrLocal = CAddress(CService(ipv6AddrLocal, 7777), NODE_NETWORK);
+    pnode->SetAddrLocal(addrLocal);
+
+    // before patch, this causes undefined behavior detectable with clang's
+    // -fsanitize=memory
+    AdvertiseLocal(&*pnode);
+
+    // suppress no-checks-run warning; if this test fails, it's by triggering a
+    // sanitizer
+    BOOST_CHECK(1);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

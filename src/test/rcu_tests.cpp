@@ -1,10 +1,10 @@
-// Copyright (c) 2018 The Bitcoin developers
+// Copyright (c) 2018-2019 The Bitcoin developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#include "rcu.h"
+#include <rcu.h>
 
-#include "test/test_bitcoin.h"
+#include <test/setup_common.h>
 
 #include <boost/test/unit_test.hpp>
 
@@ -40,8 +40,8 @@ enum RCUTestStep {
                             [&] { return otherstep == step; }))
 
 void synchronize(std::atomic<RCUTestStep> &step,
-                 const std::atomic<RCUTestStep> &otherstep,
-                 CWaitableCriticalSection &cs, std::condition_variable &cond,
+                 const std::atomic<RCUTestStep> &otherstep, Mutex &cs,
+                 std::condition_variable &cond,
                  std::atomic<uint64_t> &syncRev) {
     assert(step == RCUTestStep::Init);
 
@@ -76,8 +76,7 @@ void synchronize(std::atomic<RCUTestStep> &step,
 
 void lockAndWaitForSynchronize(std::atomic<RCUTestStep> &step,
                                const std::atomic<RCUTestStep> &otherstep,
-                               CWaitableCriticalSection &cs,
-                               std::condition_variable &cond,
+                               Mutex &cs, std::condition_variable &cond,
                                std::atomic<uint64_t> &syncRev) {
     assert(step == RCUTestStep::Init);
     WAIT_LOCK(cs, lock);
@@ -111,7 +110,7 @@ void lockAndWaitForSynchronize(std::atomic<RCUTestStep> &step,
 static const int COUNT = 128;
 
 BOOST_AUTO_TEST_CASE(synchronize_test) {
-    CWaitableCriticalSection cs;
+    Mutex cs;
     std::condition_variable cond;
     std::atomic<RCUTestStep> parentstep;
     std::atomic<RCUTestStep> childstep;
@@ -132,6 +131,9 @@ BOOST_AUTO_TEST_CASE(synchronize_test) {
         tlock.join();
         tsync.join();
     }
+
+    // Needed to suppress "Test case [...] did not check any assertions"
+    BOOST_CHECK(true);
 }
 
 BOOST_AUTO_TEST_CASE(cleanup_test) {
@@ -257,7 +259,6 @@ BOOST_AUTO_TEST_CASE(rcuptr_operator_test) {
 
     // Check various operators.
     BOOST_CHECK_EQUAL(gptr.get(), NULLPTR(RCURefTestItem));
-    BOOST_CHECK_EQUAL(&*gptr, NULLPTR(RCURefTestItem));
     BOOST_CHECK_EQUAL(gptr, NULLPTR(RCURefTestItem));
     BOOST_CHECK(!gptr);
 

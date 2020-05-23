@@ -7,6 +7,7 @@
 import os
 
 from test_framework.test_framework import BitcoinTestFramework
+from test_framework.test_node import ErrorMatch
 
 
 class LoggingTest(BitcoinTestFramework):
@@ -14,15 +15,17 @@ class LoggingTest(BitcoinTestFramework):
         self.num_nodes = 1
         self.setup_clean_chain = True
 
+    def relative_log_path(self, name):
+        return os.path.join(self.nodes[0].datadir, "regtest", name)
+
     def run_test(self):
         # test default log file name
-        assert os.path.isfile(os.path.join(
-            self.nodes[0].datadir, "regtest", "debug.log"))
+        default_log_path = self.relative_log_path("debug.log")
+        assert os.path.isfile(default_log_path)
 
         # test alternative log file name in datadir
         self.restart_node(0, ["-debuglogfile=foo.log"])
-        assert os.path.isfile(os.path.join(
-            self.nodes[0].datadir, "regtest", "foo.log"))
+        assert os.path.isfile(self.relative_log_path("foo.log"))
 
         # test alternative log file name outside datadir
         tempname = os.path.join(self.options.tmpdir, "foo.log")
@@ -30,11 +33,12 @@ class LoggingTest(BitcoinTestFramework):
         assert os.path.isfile(tempname)
 
         # check that invalid log (relative) will cause error
-        invdir = os.path.join(self.nodes[0].datadir, "regtest", "foo")
+        invdir = self.relative_log_path("foo")
         invalidname = os.path.join("foo", "foo.log")
         self.stop_node(0)
-        self.assert_start_raises_init_error(0, ["-debuglogfile={}".format(invalidname)],
-                                            "Error: Could not open debug log file")
+        exp_stderr = r"Error: Could not open debug log file \S+$"
+        self.nodes[0].assert_start_raises_init_error(
+            ["-debuglogfile={}".format(invalidname)], exp_stderr, match=ErrorMatch.FULL_REGEX)
         assert not os.path.isfile(os.path.join(invdir, "foo.log"))
 
         # check that invalid log (relative) works after path exists
@@ -47,8 +51,8 @@ class LoggingTest(BitcoinTestFramework):
         self.stop_node(0)
         invdir = os.path.join(self.options.tmpdir, "foo")
         invalidname = os.path.join(invdir, "foo.log")
-        self.assert_start_raises_init_error(0, ["-debuglogfile={}".format(invalidname)],
-                                            "Error: Could not open debug log file")
+        self.nodes[0].assert_start_raises_init_error(
+            ["-debuglogfile={}".format(invalidname)], exp_stderr, match=ErrorMatch.FULL_REGEX)
         assert not os.path.isfile(os.path.join(invdir, "foo.log"))
 
         # check that invalid log (absolute) works after path exists
@@ -56,6 +60,17 @@ class LoggingTest(BitcoinTestFramework):
         os.mkdir(invdir)
         self.start_node(0, ["-debuglogfile={}".format(invalidname)])
         assert os.path.isfile(os.path.join(invdir, "foo.log"))
+
+        # check that -nodebuglogfile disables logging
+        self.stop_node(0)
+        os.unlink(default_log_path)
+        assert not os.path.isfile(default_log_path)
+        self.start_node(0, ["-nodebuglogfile"])
+        assert not os.path.isfile(default_log_path)
+
+        # just sanity check no crash here
+        self.stop_node(0)
+        self.start_node(0, ["-debuglogfile={}".format(os.devnull)])
 
 
 if __name__ == '__main__':

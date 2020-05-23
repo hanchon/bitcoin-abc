@@ -6,25 +6,23 @@
 #ifndef BITCOIN_POLICY_POLICY_H
 #define BITCOIN_POLICY_POLICY_H
 
-#include "consensus/consensus.h"
-#include "feerate.h"
-#include "script/standard.h"
+#include <consensus/consensus.h>
+#include <feerate.h>
+#include <policy/settings.h>
+#include <script/standard.h>
 
 #include <string>
 
 class CCoinsViewCache;
 class CTransaction;
+class CTxIn;
+class CTxOut;
 
 /**
  * Default for -blockmaxsize, which controls the maximum size of block the
  * mining code will create.
  */
 static const uint64_t DEFAULT_MAX_GENERATED_BLOCK_SIZE = 2 * ONE_MEGABYTE;
-/**
- * Default for -blockprioritypercentage, define the amount of block space
- * reserved to high priority transactions.
- */
-static const uint64_t DEFAULT_BLOCK_PRIORITY_PERCENTAGE = 5;
 /**
  * Default for -blockmintxfee, which sets the minimum feerate for a transaction
  * in blocks created by mining code.
@@ -46,14 +44,6 @@ static const unsigned int MAX_STANDARD_TX_SIZE = 100000;
 static const unsigned int MAX_TX_IN_SCRIPT_SIG_SIZE = 1650;
 
 /**
- * Maximum number of signature check operations in an IsStandard() P2SH script.
- */
-static const unsigned int MAX_P2SH_SIGOPS = 15;
-/**
- * The maximum number of sigops we're willing to relay/mine in a single tx.
- */
-static const unsigned int MAX_STANDARD_TX_SIGOPS = MAX_TX_SIGOPS_COUNT / 5;
-/**
  * Default for -maxmempool, maximum megabytes of mempool memory usage.
  */
 static const unsigned int DEFAULT_MAX_MEMPOOL_SIZE = 300;
@@ -65,7 +55,9 @@ static const CFeeRate MEMPOOL_FULL_FEE_INCREMENT(1000 * SATOSHI);
 /**
  * Default for -bytespersigop .
  */
-static const unsigned int DEFAULT_BYTES_PER_SIGOP = 20;
+static const unsigned int DEFAULT_BYTES_PER_SIGOP = 50;
+/** Default for -permitbaremultisig */
+static const bool DEFAULT_PERMIT_BAREMULTISIG = true;
 /**
  * Min feerate for defining dust. Historically this has been the same as the
  * minRelayTxFee, however changing the dust limit changes which transactions are
@@ -76,37 +68,51 @@ static const unsigned int DEFAULT_BYTES_PER_SIGOP = 20;
 static const Amount DUST_RELAY_TX_FEE(1000 * SATOSHI);
 
 /**
+ * When transactions fail script evaluations under standard flags, this flagset
+ * influences the decision of whether to drop them or to also ban the originator
+ * (see CheckInputs).
+ */
+static const uint32_t MANDATORY_SCRIPT_VERIFY_FLAGS =
+    SCRIPT_VERIFY_P2SH | SCRIPT_VERIFY_STRICTENC |
+    SCRIPT_ENABLE_SIGHASH_FORKID | SCRIPT_VERIFY_LOW_S |
+    SCRIPT_VERIFY_NULLFAIL | SCRIPT_VERIFY_MINIMALDATA |
+    SCRIPT_ENABLE_SCHNORR_MULTISIG;
+
+/**
  * Standard script verification flags that standard transactions will comply
  * with. However scripts violating these flags may still be present in valid
  * blocks and we must accept those blocks.
+ *
+ * Note that the actual mempool validation flags may be slightly different (see
+ * GetStandardScriptFlags), however this constant should be set to the most
+ * restrictive flag set that applies in the current / next upgrade, since it is
+ * used in numerous parts of the codebase that are unable to access the
+ * contextual information of which upgrades are currently active.
  */
-static const uint32_t STANDARD_SCRIPT_VERIFY_FLAGS =
-    MANDATORY_SCRIPT_VERIFY_FLAGS | SCRIPT_VERIFY_DERSIG | SCRIPT_VERIFY_LOW_S |
-    SCRIPT_VERIFY_NULLDUMMY | SCRIPT_VERIFY_SIGPUSHONLY |
-    SCRIPT_VERIFY_MINIMALDATA | SCRIPT_VERIFY_DISCOURAGE_UPGRADABLE_NOPS |
-    SCRIPT_VERIFY_CLEANSTACK | SCRIPT_VERIFY_CHECKLOCKTIMEVERIFY |
-    SCRIPT_VERIFY_CHECKSEQUENCEVERIFY | SCRIPT_VERIFY_NULLFAIL;
+static constexpr uint32_t STANDARD_SCRIPT_VERIFY_FLAGS =
+    MANDATORY_SCRIPT_VERIFY_FLAGS | SCRIPT_VERIFY_DERSIG |
+    SCRIPT_VERIFY_SIGPUSHONLY | SCRIPT_VERIFY_MINIMALDATA |
+    SCRIPT_VERIFY_DISCOURAGE_UPGRADABLE_NOPS | SCRIPT_VERIFY_CLEANSTACK |
+    SCRIPT_VERIFY_CHECKLOCKTIMEVERIFY | SCRIPT_VERIFY_CHECKSEQUENCEVERIFY |
+    SCRIPT_VERIFY_CHECKDATASIG_SIGOPS | SCRIPT_DISALLOW_SEGWIT_RECOVERY |
+    SCRIPT_VERIFY_INPUT_SIGCHECKS;
 
 /**
  * For convenience, standard but not mandatory verify flags.
  */
-static const uint32_t STANDARD_NOT_MANDATORY_VERIFY_FLAGS =
+static constexpr uint32_t STANDARD_NOT_MANDATORY_VERIFY_FLAGS =
     STANDARD_SCRIPT_VERIFY_FLAGS & ~MANDATORY_SCRIPT_VERIFY_FLAGS;
 
 /**
  * Used as the flags parameter to sequence and nLocktime checks in non-consensus
  * code.
  */
-static const uint32_t STANDARD_LOCKTIME_VERIFY_FLAGS =
+static constexpr uint32_t STANDARD_LOCKTIME_VERIFY_FLAGS =
     LOCKTIME_VERIFY_SEQUENCE | LOCKTIME_MEDIAN_TIME_PAST;
 
-/**
- * Used as the flags parameters to check for sigops as if OP_CHECKDATASIG is
- * enabled. Can be removed after OP_CHECKDATASIG is activated as the flag is
- * made standard.
- */
-static const uint32_t STANDARD_CHECKDATASIG_VERIFY_FLAGS =
-    STANDARD_SCRIPT_VERIFY_FLAGS | SCRIPT_ENABLE_CHECKDATASIG;
+Amount GetDustThreshold(const CTxOut &txout, const CFeeRate &dustRelayFee);
+
+bool IsDust(const CTxOut &txout, const CFeeRate &dustRelayFee);
 
 bool IsStandard(const CScript &scriptPubKey, txnouttype &whichType);
 
@@ -123,11 +129,23 @@ bool IsStandardTx(const CTransaction &tx, std::string &reason);
  * spending
  * @return True if all inputs (scriptSigs) use only standard transaction forms
  */
-bool AreInputsStandard(const CTransaction &tx,
-                       const CCoinsViewCache &mapInputs);
+bool AreInputsStandard(const CTransaction &tx, const CCoinsViewCache &mapInputs,
+                       uint32_t flags);
 
-extern CFeeRate incrementalRelayFee;
-extern CFeeRate dustRelayFee;
-extern uint32_t nBytesPerSigOp;
+/**
+ * Compute the virtual transaction size (size, or more if sigops are too
+ * dense).
+ */
+int64_t GetVirtualTransactionSize(int64_t nSize, int64_t nSigOpCount,
+                                  unsigned int bytes_per_sigop);
+int64_t GetVirtualTransactionSize(const CTransaction &tx, int64_t nSigOpCount,
+                                  unsigned int bytes_per_sigop);
+int64_t GetVirtualTransactionInputSize(const CTxIn &txin, int64_t nSigOpCount,
+                                       unsigned int bytes_per_sigop);
+
+static inline int64_t GetVirtualTransactionSize(int64_t nSize,
+                                                int64_t nSigOpCount) {
+    return GetVirtualTransactionSize(nSize, nSigOpCount, ::nBytesPerSigOp);
+}
 
 #endif // BITCOIN_POLICY_POLICY_H

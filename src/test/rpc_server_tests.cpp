@@ -2,13 +2,14 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#include "chainparams.h"
-#include "config.h"
-#include "rpc/jsonrpcrequest.h"
-#include "rpc/server.h"
-#include "util.h"
+#include <rpc/jsonrpcrequest.h>
+#include <rpc/server.h>
 
-#include "test/test_bitcoin.h"
+#include <chainparams.h>
+#include <config.h>
+#include <util/system.h>
+
+#include <test/setup_common.h>
 
 #include <boost/test/unit_test.hpp>
 
@@ -35,7 +36,8 @@ BOOST_AUTO_TEST_CASE(rpc_server_execute_command) {
     DummyConfig config;
     RPCServer rpcServer;
     const std::string commandName = "testcommand1";
-    rpcServer.RegisterCommand(MakeUnique<ArgsTestRPCCommand>(commandName));
+    rpcServer.RegisterCommand(
+        std::make_unique<ArgsTestRPCCommand>(commandName));
 
     UniValue args(UniValue::VOBJ);
     args.pushKV("arg1", "value1");
@@ -73,7 +75,7 @@ BOOST_AUTO_TEST_CASE(rpc_server_execute_command_from_request_context) {
     RPCServer rpcServer;
     const std::string commandName = "testcommand2";
     rpcServer.RegisterCommand(
-        MakeUnique<RequestContextRPCCommand>(commandName));
+        std::make_unique<RequestContextRPCCommand>(commandName));
 
     UniValue args(UniValue::VOBJ);
     args.pushKV("arg2", "value2");

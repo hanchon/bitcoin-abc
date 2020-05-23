@@ -3,11 +3,11 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#include "primitives/transaction.h"
+#include <primitives/transaction.h>
 
-#include "hash.h"
-#include "tinyformat.h"
-#include "utilstrencodings.h"
+#include <hash.h>
+#include <tinyformat.h>
+#include <util/strencodings.h>
 
 std::string COutPoint::ToString() const {
     return strprintf("COutPoint(%s, %u)", txid.ToString().substr(0, 10), n);
@@ -38,7 +38,7 @@ std::string CTxOut::ToString() const {
 CMutableTransaction::CMutableTransaction()
     : nVersion(CTransaction::CURRENT_VERSION), nLockTime(0) {}
 CMutableTransaction::CMutableTransaction(const CTransaction &tx)
-    : nVersion(tx.nVersion), vin(tx.vin), vout(tx.vout),
+    : vin(tx.vin), vout(tx.vout), nVersion(tx.nVersion),
       nLockTime(tx.nLockTime) {}
 
 static uint256 ComputeCMutableTransactionHash(const CMutableTransaction &tx) {
@@ -62,13 +62,13 @@ uint256 CTransaction::ComputeHash() const {
  * TODO: remove the need for this default constructor entirely.
  */
 CTransaction::CTransaction()
-    : nVersion(CTransaction::CURRENT_VERSION), vin(), vout(), nLockTime(0),
+    : vin(), vout(), nVersion(CTransaction::CURRENT_VERSION), nLockTime(0),
       hash() {}
 CTransaction::CTransaction(const CMutableTransaction &tx)
-    : nVersion(tx.nVersion), vin(tx.vin), vout(tx.vout),
+    : vin(tx.vin), vout(tx.vout), nVersion(tx.nVersion),
       nLockTime(tx.nLockTime), hash(ComputeHash()) {}
 CTransaction::CTransaction(CMutableTransaction &&tx)
-    : nVersion(tx.nVersion), vin(std::move(tx.vin)), vout(std::move(tx.vout)),
+    : vin(std::move(tx.vin)), vout(std::move(tx.vout)), nVersion(tx.nVersion),
       nLockTime(tx.nLockTime), hash(ComputeHash()) {}
 
 Amount CTransaction::GetValueOut() const {
@@ -83,42 +83,8 @@ Amount CTransaction::GetValueOut() const {
     return nValueOut;
 }
 
-double CTransaction::ComputePriority(double dPriorityInputs,
-                                     unsigned int nTxSize) const {
-    nTxSize = CalculateModifiedSize(nTxSize);
-    if (nTxSize == 0) {
-        return 0.0;
-    }
-
-    return dPriorityInputs / nTxSize;
-}
-
-unsigned int CTransaction::CalculateModifiedSize(unsigned int nTxSize) const {
-    // In order to avoid disincentivizing cleaning up the UTXO set we don't
-    // count the constant overhead for each txin and up to 110 bytes of
-    // scriptSig (which is enough to cover a compressed pubkey p2sh redemption)
-    // for priority. Providing any more cleanup incentive than making additional
-    // inputs free would risk encouraging people to create junk outputs to
-    // redeem later.
-    if (nTxSize == 0) {
-        nTxSize = GetTotalSize();
-    }
-    for (const auto &nVin : vin) {
-        unsigned int offset =
-            41U + std::min(110U, (unsigned int)nVin.scriptSig.size());
-        if (nTxSize > offset) {
-            nTxSize -= offset;
-        }
-    }
-    return nTxSize;
-}
-
-size_t CTransaction::GetBillableSize() const {
-    return ::GetSerializeSize(*this, SER_NETWORK, PROTOCOL_VERSION);
-}
-
 unsigned int CTransaction::GetTotalSize() const {
-    return ::GetSerializeSize(*this, SER_NETWORK, PROTOCOL_VERSION);
+    return ::GetSerializeSize(*this, PROTOCOL_VERSION);
 }
 
 std::string CTransaction::ToString() const {

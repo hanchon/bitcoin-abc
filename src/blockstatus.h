@@ -1,12 +1,12 @@
-// Copyright (c) 2018 The Bitcoin developers
+// Copyright (c) 2018-2019 The Bitcoin developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 #ifndef BITCOIN_BLOCKSTATUS_H
 #define BITCOIN_BLOCKSTATUS_H
 
-#include "blockvalidity.h"
-#include "serialize.h"
+#include <blockvalidity.h>
+#include <serialize.h>
 
 #include <cstdint>
 

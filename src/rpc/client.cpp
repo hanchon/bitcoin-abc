@@ -3,9 +3,9 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#include "rpc/client.h"
-#include "rpc/protocol.h"
-#include "util.h"
+#include <rpc/client.h>
+#include <rpc/protocol.h>
+#include <util/system.h>
 
 #include <cstdint>
 #include <set>
@@ -20,7 +20,7 @@ public:
 };
 
 /**
- * Specifiy a (method, idx, name) here if the argument is a non-string RPC
+ * Specify a (method, idx, name) here if the argument is a non-string RPC
  * argument and needs to be converted from JSON.
  *
  * @note Parameter indexes start from 0.
@@ -36,16 +36,12 @@ static const CRPCConvertParam vRPCConvertParams[] = {
     {"sendtoaddress", 1, "amount"},
     {"sendtoaddress", 4, "subtractfeefromamount"},
     {"settxfee", 0, "amount"},
+    {"sethdseed", 0, "newkeypool"},
     {"getreceivedbyaddress", 1, "minconf"},
-    {"getreceivedbyaccount", 1, "minconf"},
     {"getreceivedbylabel", 1, "minconf"},
     {"listreceivedbyaddress", 0, "minconf"},
     {"listreceivedbyaddress", 1, "include_empty"},
     {"listreceivedbyaddress", 2, "include_watchonly"},
-    {"listreceivedbyaddress", 3, "address_filter"},
-    {"listreceivedbyaccount", 0, "minconf"},
-    {"listreceivedbyaccount", 1, "include_empty"},
-    {"listreceivedbyaccount", 2, "include_watchonly"},
     {"listreceivedbylabel", 0, "minconf"},
     {"listreceivedbylabel", 1, "include_empty"},
     {"listreceivedbylabel", 2, "include_watchonly"},
@@ -56,15 +52,9 @@ static const CRPCConvertParam vRPCConvertParams[] = {
     {"waitforblockheight", 1, "timeout"},
     {"waitforblock", 1, "timeout"},
     {"waitfornewblock", 0, "timeout"},
-    {"move", 2, "amount"},
-    {"move", 3, "minconf"},
-    {"sendfrom", 2, "amount"},
-    {"sendfrom", 3, "minconf"},
     {"listtransactions", 1, "count"},
     {"listtransactions", 2, "skip"},
     {"listtransactions", 3, "include_watchonly"},
-    {"listaccounts", 0, "minconf"},
-    {"listaccounts", 1, "include_watchonly"},
     {"walletpassphrase", 1, "timeout"},
     {"getblocktemplate", 0, "template_request"},
     {"listsinceblock", 1, "target_confirmations"},
@@ -73,6 +63,9 @@ static const CRPCConvertParam vRPCConvertParams[] = {
     {"sendmany", 1, "amounts"},
     {"sendmany", 2, "minconf"},
     {"sendmany", 4, "subtractfeefrom"},
+    {"deriveaddresses", 1, "begin"},
+    {"deriveaddresses", 2, "end"},
+    {"scantxoutset", 1, "scanobjects"},
     {"addmultisigaddress", 0, "nrequired"},
     {"addmultisigaddress", 1, "keys"},
     {"createmultisig", 0, "nrequired"},
@@ -80,8 +73,10 @@ static const CRPCConvertParam vRPCConvertParams[] = {
     {"listunspent", 0, "minconf"},
     {"listunspent", 1, "maxconf"},
     {"listunspent", 2, "addresses"},
+    {"listunspent", 3, "include_unsafe"},
     {"listunspent", 4, "query_options"},
     {"getblock", 1, "verbosity"},
+    {"getblock", 1, "verbose"},
     {"getblockheader", 1, "verbose"},
     {"getchaintxstats", 0, "nblocks"},
     {"gettransaction", 1, "include_watchonly"},
@@ -89,14 +84,28 @@ static const CRPCConvertParam vRPCConvertParams[] = {
     {"createrawtransaction", 0, "inputs"},
     {"createrawtransaction", 1, "outputs"},
     {"createrawtransaction", 2, "locktime"},
-    {"signrawtransaction", 1, "prevtxs"},
-    {"signrawtransaction", 2, "privkeys"},
     {"signrawtransactionwithkey", 1, "privkeys"},
     {"signrawtransactionwithkey", 2, "prevtxs"},
     {"signrawtransactionwithwallet", 1, "prevtxs"},
     {"sendrawtransaction", 1, "allowhighfees"},
+    {"testmempoolaccept", 0, "rawtxs"},
+    {"testmempoolaccept", 1, "allowhighfees"},
     {"combinerawtransaction", 0, "txs"},
     {"fundrawtransaction", 1, "options"},
+    {"walletcreatefundedpsbt", 0, "inputs"},
+    {"walletcreatefundedpsbt", 1, "outputs"},
+    {"walletcreatefundedpsbt", 2, "locktime"},
+    {"walletcreatefundedpsbt", 3, "options"},
+    {"walletcreatefundedpsbt", 4, "bip32derivs"},
+    {"walletprocesspsbt", 1, "sign"},
+    {"walletprocesspsbt", 3, "bip32derivs"},
+    {"createpsbt", 0, "inputs"},
+    {"createpsbt", 1, "outputs"},
+    {"createpsbt", 2, "locktime"},
+    {"combinepsbt", 0, "txs"},
+    {"joinpsbts", 0, "txs"},
+    {"finalizepsbt", 1, "extract"},
+    {"converttopsbt", 1, "permitsigdata"},
     {"gettxout", 1, "n"},
     {"gettxout", 2, "include_mempool"},
     {"gettxoutproof", 0, "txids"},
@@ -110,11 +119,13 @@ static const CRPCConvertParam vRPCConvertParams[] = {
     {"importmulti", 1, "options"},
     {"verifychain", 0, "checklevel"},
     {"verifychain", 1, "nblocks"},
+    {"getblockstats", 0, "hash_or_height"},
+    {"getblockstats", 1, "stats"},
     {"pruneblockchain", 0, "height"},
     {"keypoolrefill", 0, "newsize"},
     {"getrawmempool", 0, "verbose"},
     {"estimatefee", 0, "nblocks"},
-    {"prioritisetransaction", 1, "priority_delta"},
+    {"prioritisetransaction", 1, "dummy"},
     {"prioritisetransaction", 2, "fee_delta"},
     {"setban", 2, "bantime"},
     {"setban", 3, "absolute"},
@@ -131,6 +142,8 @@ static const CRPCConvertParam vRPCConvertParams[] = {
     { "getaddressutxos", 0, "addresses"},
     { "getaddressmempool", 0, "addresses"},
     {"disconnectnode", 1, "nodeid"},
+    {"logging", 0, "include"},
+    {"logging", 1, "exclude"},
     // Echo with conversion (For testing only)
     {"echojson", 0, "arg0"},
     {"echojson", 1, "arg1"},
@@ -144,6 +157,14 @@ static const CRPCConvertParam vRPCConvertParams[] = {
     {"echojson", 9, "arg9"},
     {"rescanblockchain", 0, "start_height"},
     {"rescanblockchain", 1, "stop_height"},
+    {"createwallet", 1, "disable_private_keys"},
+    {"createwallet", 2, "blank"},
+    {"getnodeaddresses", 0, "count"},
+    {"stop", 0, "wait"},
+    // Avalanche
+    {"addavalanchepeer", 0, "nodeid"},
+    // ABC specific RPC
+    {"setexcessiveblock", 0, "blockSize"},
 };
 
 class CRPCConvertTable {
@@ -183,8 +204,9 @@ static CRPCConvertTable rpcCvtTable;
 UniValue ParseNonRFCJSONValue(const std::string &strVal) {
     UniValue jVal;
     if (!jVal.read(std::string("[") + strVal + std::string("]")) ||
-        !jVal.isArray() || jVal.size() != 1)
+        !jVal.isArray() || jVal.size() != 1) {
         throw std::runtime_error(std::string("Error parsing JSON:") + strVal);
+    }
     return jVal[0];
 }
 
@@ -212,7 +234,7 @@ UniValue RPCConvertNamedValues(const std::string &strMethod,
     UniValue params(UniValue::VOBJ);
 
     for (const std::string &s : strParams) {
-        size_t pos = s.find("=");
+        size_t pos = s.find('=');
         if (pos == std::string::npos) {
             throw(std::runtime_error("No '=' in named argument '" + s +
                                      "', this needs to be present for every "

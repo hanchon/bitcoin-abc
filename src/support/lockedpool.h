@@ -10,6 +10,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <unordered_map>
 
 /**
  * OS-dependent allocation and deallocation of locked/pinned memory pages.
@@ -51,6 +52,9 @@ public:
     Arena(void *base, size_t size, size_t alignment);
     virtual ~Arena();
 
+    Arena(const Arena &other) = delete;       // non construction-copyable
+    Arena &operator=(const Arena &) = delete; // non copyable
+
     /** Memory statistics. */
     struct Stats {
         size_t used;
@@ -89,17 +93,20 @@ public:
     bool addressInArena(void *ptr) const { return ptr >= base && ptr < end; }
 
 private:
-    // non construction-copyable
-    Arena(const Arena &other) = delete;
-    // non copyable
-    Arena &operator=(const Arena &) = delete;
+    typedef std::multimap<size_t, char *> SizeToChunkSortedMap;
+    /** Map to enable O(log(n)) best-fit allocation, as it's sorted by size */
+    SizeToChunkSortedMap size_to_free_chunk;
 
-    /**
-     * Map of chunk address to chunk information. This class makes use of the
-     * sorted order to merge previous and next chunks during deallocation.
-     */
-    std::map<char *, size_t> chunks_free;
-    std::map<char *, size_t> chunks_used;
+    typedef std::unordered_map<char *, SizeToChunkSortedMap::const_iterator>
+        ChunkToSizeMap;
+    /** Map from begin of free chunk to its node in size_to_free_chunk */
+    ChunkToSizeMap chunks_free;
+    /** Map from end of free chunk to its node in size_to_free_chunk */
+    ChunkToSizeMap chunks_free_end;
+
+    /** Map from begin of used chunk to its size */
+    std::unordered_map<char *, size_t> chunks_used;
+
     /** Base address of arena */
     char *base;
     /** End address of arena */
@@ -165,6 +172,9 @@ public:
                         LockingFailed_Callback lf_cb_in = nullptr);
     ~LockedPool();
 
+    LockedPool(const LockedPool &other) = delete; // non construction-copyable
+    LockedPool &operator=(const LockedPool &) = delete; // non copyable
+
     /**
      * Allocate size bytes from this arena.
      * Returns pointer on success, or 0 if memory is full or the application
@@ -183,11 +193,6 @@ public:
     Stats stats() const;
 
 private:
-    // non construction-copyable
-    LockedPool(const LockedPool &other) = delete;
-    // non copyable
-    LockedPool &operator=(const LockedPool &) = delete;
-
     std::unique_ptr<LockedPageAllocator> allocator;
 
     /** Create an arena from locked pages */

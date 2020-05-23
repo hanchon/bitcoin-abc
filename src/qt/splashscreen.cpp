@@ -3,31 +3,33 @@
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 #if defined(HAVE_CONFIG_H)
-#include "config/bitcoin-config.h"
+#include <config/bitcoin-config.h>
 #endif
 
-#include "splashscreen.h"
+#include <qt/splashscreen.h>
 
-#include "networkstyle.h"
-
-#include "clientversion.h"
-#include "init.h"
-#include "ui_interface.h"
-#include "util.h"
-#include "version.h"
-
-#ifdef ENABLE_WALLET
-#include "wallet/wallet.h"
-#endif
+#include <clientversion.h>
+#include <interfaces/handler.h>
+#include <interfaces/node.h>
+#include <interfaces/wallet.h>
+#include <qt/guiutil.h>
+#include <qt/networkstyle.h>
+#include <ui_interface.h>
+#include <util/system.h>
+#include <util/translation.h>
+#include <version.h>
 
 #include <QApplication>
 #include <QCloseEvent>
-#include <QDesktopWidget>
 #include <QPainter>
 #include <QRadialGradient>
+#include <QScreen>
 
-SplashScreen::SplashScreen(Qt::WindowFlags f, const NetworkStyle *networkStyle)
-    : QWidget(0, f), curAlignment(0) {
+#include <memory>
+
+SplashScreen::SplashScreen(interfaces::Node &node, Qt::WindowFlags f,
+                           const NetworkStyle *networkStyle)
+    : QWidget(nullptr, f), curAlignment(0), m_node(node) {
     // set reference point, paddings
     int paddingRight = 50;
     int paddingTop = 50;
@@ -43,7 +45,7 @@ SplashScreen::SplashScreen(Qt::WindowFlags f, const NetworkStyle *networkStyle)
 #endif
 
     // define text to place
-    QString titleText = tr(PACKAGE_NAME);
+    QString titleText = PACKAGE_NAME;
     QString versionText =
         QString("Version %1").arg(QString::fromStdString(FormatFullVersion()));
     QString copyrightText = QString::fromUtf8(
@@ -84,23 +86,23 @@ SplashScreen::SplashScreen(Qt::WindowFlags f, const NetworkStyle *networkStyle)
     // check font size and drawing with
     pixPaint.setFont(QFont(font, 33 * fontFactor));
     QFontMetrics fm = pixPaint.fontMetrics();
-    int titleTextWidth = fm.width(titleText);
+    int titleTextWidth = GUIUtil::TextWidth(fm, titleText);
     if (titleTextWidth > 176) {
         fontFactor = fontFactor * 176 / titleTextWidth;
     }
 
     pixPaint.setFont(QFont(font, 33 * fontFactor));
     fm = pixPaint.fontMetrics();
-    titleTextWidth = fm.width(titleText);
+    titleTextWidth = GUIUtil::TextWidth(fm, titleText);
     pixPaint.drawText(pixmap.width() / devicePixelRatio - titleTextWidth -
                           paddingRight,
                       paddingTop, titleText);
 
     pixPaint.setFont(QFont(font, 15 * fontFactor));
 
-    // if the version string is to long, reduce size
+    // if the version string is too long, reduce size
     fm = pixPaint.fontMetrics();
-    int versionTextWidth = fm.width(versionText);
+    int versionTextWidth = GUIUtil::TextWidth(fm, titleText);
     if (versionTextWidth > titleTextWidth + paddingRight - 10) {
         pixPaint.setFont(QFont(font, 10 * fontFactor));
         titleVersionVSpace -= 5;
@@ -128,7 +130,7 @@ SplashScreen::SplashScreen(Qt::WindowFlags f, const NetworkStyle *networkStyle)
         boldFont.setWeight(QFont::Bold);
         pixPaint.setFont(boldFont);
         fm = pixPaint.fontMetrics();
-        int titleAddTextWidth = fm.width(titleAddText);
+        int titleAddTextWidth = GUIUtil::TextWidth(fm, titleAddText);
         pixPaint.drawText(pixmap.width() / devicePixelRatio -
                               titleAddTextWidth - 10,
                           15, titleAddText);
@@ -144,7 +146,7 @@ SplashScreen::SplashScreen(Qt::WindowFlags f, const NetworkStyle *networkStyle)
                             pixmap.size().height() / devicePixelRatio));
     resize(r.size());
     setFixedSize(r.size());
-    move(QApplication::desktop()->screenGeometry().center() - r.center());
+    move(QGuiApplication::primaryScreen()->geometry().center() - r.center());
 
     subscribeToCoreSignals();
     installEventFilter(this);
@@ -158,7 +160,7 @@ bool SplashScreen::eventFilter(QObject *obj, QEvent *ev) {
     if (ev->type() == QEvent::KeyPress) {
         QKeyEvent *keyEvent = static_cast<QKeyEvent *>(ev);
         if (keyEvent->text()[0] == 'q') {
-            StartShutdown();
+            m_node.startShutdown();
         }
     }
     return QObject::eventFilter(obj, ev);
@@ -169,57 +171,66 @@ void SplashScreen::slotFinish(QWidget *mainWin) {
 
     /* If the window is minimized, hide() will be ignored. */
     /* Make sure we de-minimize the splashscreen window before hiding */
-    if (isMinimized()) showNormal();
+    if (isMinimized()) {
+        showNormal();
+    }
     hide();
-    deleteLater(); // No more need for this
+    // No more need for this
+    deleteLater();
 }
 
 static void InitMessage(SplashScreen *splash, const std::string &message) {
-    QMetaObject::invokeMethod(splash, "showMessage", Qt::QueuedConnection,
-                              Q_ARG(QString, QString::fromStdString(message)),
-                              Q_ARG(int, Qt::AlignBottom | Qt::AlignHCenter),
-                              Q_ARG(QColor, QColor(55, 55, 55)));
+    bool invoked = QMetaObject::invokeMethod(
+        splash, "showMessage", Qt::QueuedConnection,
+        Q_ARG(QString, QString::fromStdString(message)),
+        Q_ARG(int, Qt::AlignBottom | Qt::AlignHCenter),
+        Q_ARG(QColor, QColor(55, 55, 55)));
+    assert(invoked);
 }
 
 static void ShowProgress(SplashScreen *splash, const std::string &title,
                          int nProgress, bool resume_possible) {
-    InitMessage(splash, title + std::string("\n") +
-                            (resume_possible
-                                 ? _("(press q to shutdown and continue later)")
-                                 : _("press q to shutdown")) +
-                            strprintf("\n%d", nProgress) + "%");
+    InitMessage(
+        splash,
+        title + std::string("\n") +
+            (resume_possible
+                 ? _("(press q to shutdown and continue later)").translated
+                 : _("press q to shutdown").translated) +
+            strprintf("\n%d", nProgress) + "%");
 }
-
 #ifdef ENABLE_WALLET
-void SplashScreen::ConnectWallet(CWallet *wallet) {
-    wallet->ShowProgress.connect(
-        boost::bind(ShowProgress, this, _1, _2, false));
-    connectedWallets.push_back(wallet);
+void SplashScreen::ConnectWallet(std::unique_ptr<interfaces::Wallet> wallet) {
+    m_connected_wallet_handlers.emplace_back(wallet->handleShowProgress(
+        std::bind(ShowProgress, this, std::placeholders::_1,
+                  std::placeholders::_2, false)));
+    m_connected_wallets.emplace_back(std::move(wallet));
 }
 #endif
 
 void SplashScreen::subscribeToCoreSignals() {
     // Connect signals to client
-    uiInterface.InitMessage.connect(boost::bind(InitMessage, this, _1));
-    uiInterface.ShowProgress.connect(
-        boost::bind(ShowProgress, this, _1, _2, _3));
+    m_handler_init_message = m_node.handleInitMessage(
+        std::bind(InitMessage, this, std::placeholders::_1));
+    m_handler_show_progress = m_node.handleShowProgress(
+        std::bind(ShowProgress, this, std::placeholders::_1,
+                  std::placeholders::_2, std::placeholders::_3));
 #ifdef ENABLE_WALLET
-    uiInterface.LoadWallet.connect(
-        boost::bind(&SplashScreen::ConnectWallet, this, _1));
+    m_handler_load_wallet = m_node.handleLoadWallet(
+        [this](std::unique_ptr<interfaces::Wallet> wallet) {
+            ConnectWallet(std::move(wallet));
+        });
 #endif
 }
 
 void SplashScreen::unsubscribeFromCoreSignals() {
     // Disconnect signals from client
-    uiInterface.InitMessage.disconnect(boost::bind(InitMessage, this, _1));
-    uiInterface.ShowProgress.disconnect(
-        boost::bind(ShowProgress, this, _1, _2, _3));
-#ifdef ENABLE_WALLET
-    for (CWallet *const &pwallet : connectedWallets) {
-        pwallet->ShowProgress.disconnect(
-            boost::bind(ShowProgress, this, _1, _2, false));
+    m_handler_init_message->disconnect();
+    m_handler_show_progress->disconnect();
+    for (const auto &handler : m_connected_wallet_handlers) {
+        handler->disconnect();
     }
-#endif
+    m_connected_wallet_handlers.clear();
+    m_connected_wallets.clear();
 }
 
 void SplashScreen::showMessage(const QString &message, int alignment,
@@ -240,6 +251,6 @@ void SplashScreen::paintEvent(QPaintEvent *event) {
 
 void SplashScreen::closeEvent(QCloseEvent *event) {
     // allows an "emergency" shutdown during startup
-    StartShutdown();
+    m_node.startShutdown();
     event->ignore();
 }

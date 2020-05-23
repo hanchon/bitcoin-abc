@@ -1,12 +1,13 @@
-// Copyright (c) 2017 The Bitcoin developers
+// Copyright (c) 2017-2019 The Bitcoin developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
-#include "cashaddrenc.h"
-#include "cashaddr.h"
-#include "chainparams.h"
-#include "pubkey.h"
-#include "script/script.h"
-#include "utilstrencodings.h"
+#include <cashaddrenc.h>
+
+#include <cashaddr.h>
+#include <chainparams.h>
+#include <pubkey.h>
+#include <script/script.h>
+#include <util/strencodings.h>
 
 #include <boost/variant/static_visitor.hpp>
 
@@ -58,7 +59,8 @@ std::vector<uint8_t> PackAddrData(const T &id, uint8_t type) {
     // hash, with version byte.  Add half a byte(4) so integer math provides
     // the next multiple-of-5 that would fit all the data.
     converted.reserve(((size + 1) * 8 + 4) / 5);
-    ConvertBits<8, 5, true>(converted, std::begin(data), std::end(data));
+    ConvertBits<8, 5, true>([&](uint8_t c) { converted.push_back(c); },
+                            std::begin(data), std::end(data));
 
     return converted;
 }
@@ -122,23 +124,12 @@ CashAddrContent DecodeCashAddrContent(const std::string &addr,
         return {};
     }
 
-    // Check that the padding is zero.
-    size_t extrabits = payload.size() * 5 % 8;
-    if (extrabits >= 5) {
-        // We have more padding than allowed.
-        return {};
-    }
-
-    uint8_t last = payload.back();
-    uint8_t mask = (1 << extrabits) - 1;
-    if (last & mask) {
-        // We have non zero bits as padding.
-        return {};
-    }
-
     std::vector<uint8_t> data;
     data.reserve(payload.size() * 5 / 8);
-    ConvertBits<5, 8, false>(data, begin(payload), end(payload));
+    if (!ConvertBits<5, 8, false>([&](uint8_t c) { data.push_back(c); },
+                                  begin(payload), end(payload))) {
+        return {};
+    }
 
     // Decode type and size from the version.
     uint8_t version = data[0];

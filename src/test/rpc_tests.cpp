@@ -1,15 +1,20 @@
-// Copyright (c) 2012-2016 The Bitcoin Core developers
+// Copyright (c) 2012-2019 The Bitcoin Core developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#include "rpc/client.h"
-#include "rpc/server.h"
+#include <rpc/client.h>
+#include <rpc/server.h>
+#include <rpc/util.h>
 
-#include "base58.h"
-#include "config.h"
-#include "netbase.h"
+#include <config.h>
+#include <core_io.h>
+#include <init.h>
+#include <interfaces/chain.h>
+#include <key_io.h>
+#include <netbase.h>
+#include <util/time.h>
 
-#include "test/test_bitcoin.h"
+#include <test/setup_common.h>
 
 #include <boost/algorithm/string.hpp>
 #include <boost/test/unit_test.hpp>
@@ -26,9 +31,11 @@ UniValue CallRPC(std::string args) {
     request.strMethod = strMethod;
     request.params = RPCConvertValues(strMethod, vArgs);
     request.fHelp = false;
-    BOOST_CHECK(tableRPC[strMethod]);
+    if (RPCIsInWarmup(nullptr)) {
+        SetRPCWarmupFinished();
+    }
     try {
-        UniValue result = tableRPC[strMethod]->call(config, request);
+        UniValue result = tableRPC.execute(config, request);
         return result;
     } catch (const UniValue &objError) {
         throw std::runtime_error(find_value(objError, "message").get_str());
@@ -52,8 +59,6 @@ BOOST_AUTO_TEST_CASE(rpc_rawparams) {
     BOOST_CHECK_THROW(CallRPC("createrawtransaction null null"),
                       std::runtime_error);
     BOOST_CHECK_THROW(CallRPC("createrawtransaction not_array"),
-                      std::runtime_error);
-    BOOST_CHECK_THROW(CallRPC("createrawtransaction [] []"),
                       std::runtime_error);
     BOOST_CHECK_THROW(CallRPC("createrawtransaction {} {}"),
                       std::runtime_error);
@@ -133,12 +138,16 @@ BOOST_AUTO_TEST_CASE(rpc_rawsign) {
         "\"KzsXybp9jX64P5ekX1KUxRQ79Jht9uzW7LorgwE65i5rWACL6LQe\"";
     std::string privkey2 =
         "\"Kyhdf5LuKTRx4ge69ybABsiUAWjVRK4XGxAKk2FQLp2HjGMy87Z4\"";
+    NodeContext node;
+    node.chain = interfaces::MakeChain();
+    g_rpc_node = &node;
     r = CallRPC(std::string("signrawtransactionwithkey ") + notsigned + " [] " +
                 prevout);
     BOOST_CHECK(find_value(r.get_obj(), "complete").get_bool() == false);
     r = CallRPC(std::string("signrawtransactionwithkey ") + notsigned + " [" +
                 privkey1 + "," + privkey2 + "] " + prevout);
     BOOST_CHECK(find_value(r.get_obj(), "complete").get_bool() == true);
+    g_rpc_node = nullptr;
 }
 
 BOOST_AUTO_TEST_CASE(rpc_rawsign_missing_amount) {
@@ -165,8 +174,14 @@ BOOST_AUTO_TEST_CASE(rpc_rawsign_missing_amount) {
         "\"KzsXybp9jX64P5ekX1KUxRQ79Jht9uzW7LorgwE65i5rWACL6LQe\"";
     std::string privkey2 =
         "\"Kyhdf5LuKTRx4ge69ybABsiUAWjVRK4XGxAKk2FQLp2HjGMy87Z4\"";
+
     bool exceptionThrownDueToMissingAmount = false,
          errorWasMissingAmount = false;
+
+    NodeContext node;
+    node.chain = interfaces::MakeChain();
+    g_rpc_node = &node;
+
     try {
         r = CallRPC(std::string("signrawtransactionwithkey ") + notsigned +
                     " [" + privkey1 + "," + privkey2 + "] " + prevout);
@@ -178,6 +193,8 @@ BOOST_AUTO_TEST_CASE(rpc_rawsign_missing_amount) {
     }
     BOOST_CHECK(exceptionThrownDueToMissingAmount == true);
     BOOST_CHECK(errorWasMissingAmount == true);
+
+    g_rpc_node = nullptr;
 }
 
 BOOST_AUTO_TEST_CASE(rpc_createraw_op_return) {
@@ -390,8 +407,9 @@ BOOST_AUTO_TEST_CASE(rpc_ban) {
     ar = r.get_array();
     BOOST_CHECK_EQUAL(ar.size(), 0UL);
 
+    // Set ban way in the future: 2283-12-18 19:33:20
     BOOST_CHECK_NO_THROW(
-        r = CallRPC(std::string("setban 127.0.0.0/24 add 1607731200 true")));
+        r = CallRPC(std::string("setban 127.0.0.0/24 add 9907731200 true")));
     BOOST_CHECK_NO_THROW(r = CallRPC(std::string("listbanned")));
     ar = r.get_array();
     o1 = ar[0].get_obj();
@@ -399,7 +417,7 @@ BOOST_AUTO_TEST_CASE(rpc_ban) {
     UniValue banned_until = find_value(o1, "banned_until");
     BOOST_CHECK_EQUAL(adr.get_str(), "127.0.0.0/24");
     // absolute time check
-    BOOST_CHECK_EQUAL(banned_until.get_int64(), 1607731200);
+    BOOST_CHECK_EQUAL(banned_until.get_int64(), 9907731200);
 
     BOOST_CHECK_NO_THROW(CallRPC(std::string("clearbanned")));
 

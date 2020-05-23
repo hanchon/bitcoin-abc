@@ -6,15 +6,16 @@
 #ifndef BITCOIN_CHAIN_H
 #define BITCOIN_CHAIN_H
 
-#include "arith_uint256.h"
-#include "blockstatus.h"
-#include "blockvalidity.h"
-#include "consensus/params.h"
-#include "diskblockpos.h"
-#include "pow.h"
-#include "primitives/block.h"
-#include "tinyformat.h"
-#include "uint256.h"
+#include <arith_uint256.h>
+#include <blockstatus.h>
+#include <blockvalidity.h>
+#include <consensus/params.h>
+#include <crypto/common.h> // for ReadLE64
+#include <flatfile.h>
+#include <primitives/block.h>
+#include <sync.h>
+#include <tinyformat.h>
+#include <uint256.h>
 
 #include <unordered_map>
 #include <vector>
@@ -23,7 +24,7 @@
  * Maximum amount of time that a block timestamp is allowed to exceed the
  * current network-adjusted time before the block will be accepted.
  */
-static const int64_t MAX_FUTURE_BLOCK_TIME = 2 * 60 * 60;
+static constexpr int64_t MAX_FUTURE_BLOCK_TIME = 2 * 60 * 60;
 
 /**
  * Timestamp window used as a grace period by code that compares external
@@ -31,7 +32,15 @@ static const int64_t MAX_FUTURE_BLOCK_TIME = 2 * 60 * 60;
  * to block timestamps. This should be set at least as high as
  * MAX_FUTURE_BLOCK_TIME.
  */
-static const int64_t TIMESTAMP_WINDOW = MAX_FUTURE_BLOCK_TIME;
+static constexpr int64_t TIMESTAMP_WINDOW = MAX_FUTURE_BLOCK_TIME;
+
+/**
+ * Maximum gap between node time and block time used
+ * for the "Catching up..." mode in GUI.
+ *
+ * Ref: https://github.com/bitcoin/bitcoin/pull/1026
+ */
+static constexpr int64_t MAX_BLOCK_TIME_GAP = 90 * 60;
 
 /**
  * The block chain is a tree shaped structure starting with the genesis block at
@@ -43,7 +52,7 @@ class CBlockIndex {
 public:
     //! pointer to the hash of the block, if any. Memory is owned by this
     //! CBlockIndex
-    const uint256 *phashBlock;
+    const BlockHash *phashBlock;
 
     //! pointer to the index of the predecessor of this block
     CBlockIndex *pprev;
@@ -96,7 +105,7 @@ public:
     //! (memory only) block header metadata
     uint64_t nTimeReceived;
 
-    //! (memory only) Maximum nTime in the chain upto and including this block.
+    //! (memory only) Maximum nTime in the chain up to and including this block.
     unsigned int nTimeMax;
 
     void SetNull() {
@@ -135,8 +144,8 @@ public:
         nNonce = block.nNonce;
     }
 
-    CDiskBlockPos GetBlockPos() const {
-        CDiskBlockPos ret;
+    FlatFilePos GetBlockPos() const {
+        FlatFilePos ret;
         if (nStatus.hasData()) {
             ret.nFile = nFile;
             ret.nPos = nDataPos;
@@ -144,8 +153,8 @@ public:
         return ret;
     }
 
-    CDiskBlockPos GetUndoPos() const {
-        CDiskBlockPos ret;
+    FlatFilePos GetUndoPos() const {
+        FlatFilePos ret;
         if (nStatus.hasUndo()) {
             ret.nFile = nFile;
             ret.nPos = nUndoPos;
@@ -166,7 +175,17 @@ public:
         return block;
     }
 
-    uint256 GetBlockHash() const { return *phashBlock; }
+    BlockHash GetBlockHash() const { return *phashBlock; }
+
+    /**
+     * Check whether this block's and all previous blocks' transactions have
+     * been downloaded (and stored to disk) at some point.
+     *
+     * Does not imply the transactions are consensus-valid (ConnectTip might
+     * fail) Does not imply the transactions are still stored on disk.
+     * (IsBlockPruned might return true)
+     */
+    bool HaveTxsDownloaded() const { return nChainTx != 0; }
 
     int64_t GetBlockTime() const { return int64_t(nTime); }
 
@@ -235,11 +254,23 @@ public:
  * Maintain a map of CBlockIndex for all known headers.
  */
 struct BlockHasher {
-    size_t operator()(const uint256 &hash) const { return hash.GetCheapHash(); }
+    // this used to call `GetCheapHash()` in uint256, which was later moved; the
+    // cheap hash function simply calls ReadLE64() however, so the end result is
+    // identical
+    size_t operator()(const BlockHash &hash) const {
+        return ReadLE64(hash.begin());
+    }
 };
 
-typedef std::unordered_map<uint256, CBlockIndex *, BlockHasher> BlockMap;
-extern BlockMap mapBlockIndex;
+extern RecursiveMutex cs_main;
+typedef std::unordered_map<BlockHash, CBlockIndex *, BlockHasher> BlockMap;
+extern BlockMap &mapBlockIndex GUARDED_BY(cs_main);
+
+inline CBlockIndex *LookupBlockIndex(const BlockHash &hash) {
+    AssertLockHeld(cs_main);
+    BlockMap::const_iterator it = mapBlockIndex.find(hash);
+    return it == mapBlockIndex.end() ? nullptr : it->second;
+}
 
 arith_uint256 GetBlockProof(const CBlockIndex &block);
 
@@ -266,12 +297,12 @@ bool AreOnTheSameFork(const CBlockIndex *pa, const CBlockIndex *pb);
 /** Used to marshal pointers into hashes for db storage. */
 class CDiskBlockIndex : public CBlockIndex {
 public:
-    uint256 hashPrev;
+    BlockHash hashPrev;
 
-    CDiskBlockIndex() { hashPrev = uint256(); }
+    CDiskBlockIndex() { hashPrev = BlockHash(); }
 
     explicit CDiskBlockIndex(const CBlockIndex *pindex) : CBlockIndex(*pindex) {
-        hashPrev = (pprev ? pprev->GetBlockHash() : uint256());
+        hashPrev = (pprev ? pprev->GetBlockHash() : BlockHash());
     }
 
     ADD_SERIALIZE_METHODS;
@@ -280,14 +311,14 @@ public:
     inline void SerializationOp(Stream &s, Operation ser_action) {
         int _nVersion = s.GetVersion();
         if (!(s.GetType() & SER_GETHASH)) {
-            READWRITE(VARINT(_nVersion));
+            READWRITE(VARINT(_nVersion, VarIntMode::NONNEGATIVE_SIGNED));
         }
 
-        READWRITE(VARINT(nHeight));
+        READWRITE(VARINT(nHeight, VarIntMode::NONNEGATIVE_SIGNED));
         READWRITE(nStatus);
         READWRITE(VARINT(nTx));
         if (nStatus.hasData() || nStatus.hasUndo()) {
-            READWRITE(VARINT(nFile));
+            READWRITE(VARINT(nFile, VarIntMode::NONNEGATIVE_SIGNED));
         }
         if (nStatus.hasData()) {
             READWRITE(VARINT(nDataPos));
@@ -305,7 +336,7 @@ public:
         READWRITE(nNonce);
     }
 
-    uint256 GetBlockHash() const {
+    BlockHash GetBlockHash() const {
         CBlockHeader block;
         block.nVersion = nVersion;
         block.hashPrevBlock = hashPrev;

@@ -3,13 +3,13 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#ifndef BITCOIN_BITCOINCONSENSUS_H
-#define BITCOIN_BITCOINCONSENSUS_H
+#ifndef BITCOIN_SCRIPT_BITCOINCONSENSUS_H
+#define BITCOIN_SCRIPT_BITCOINCONSENSUS_H
 
 #include <cstdint>
 
 #if defined(BUILD_BITCOIN_INTERNAL) && defined(HAVE_CONFIG_H)
-#include "config/bitcoin-config.h"
+#include <config/bitcoin-config.h>
 #if defined(_WIN32)
 #if defined(DLL_EXPORT)
 #if defined(HAVE_FUNC_ATTRIBUTE_DLLEXPORT)
@@ -51,8 +51,6 @@ enum {
     bitcoinconsensus_SCRIPT_FLAGS_VERIFY_P2SH = (1U << 0),
     // enforce strict DER (BIP66) compliance
     bitcoinconsensus_SCRIPT_FLAGS_VERIFY_DERSIG = (1U << 2),
-    // enforce NULLDUMMY (BIP147)
-    bitcoinconsensus_SCRIPT_FLAGS_VERIFY_NULLDUMMY = (1U << 4),
     // enable CHECKLOCKTIMEVERIFY (BIP65)
     bitcoinconsensus_SCRIPT_FLAGS_VERIFY_CHECKLOCKTIMEVERIFY = (1U << 9),
     // enable CHECKSEQUENCEVERIFY (BIP112)
@@ -64,7 +62,6 @@ enum {
     bitcoinconsensus_SCRIPT_FLAGS_VERIFY_ALL =
         bitcoinconsensus_SCRIPT_FLAGS_VERIFY_P2SH |
         bitcoinconsensus_SCRIPT_FLAGS_VERIFY_DERSIG |
-        bitcoinconsensus_SCRIPT_FLAGS_VERIFY_NULLDUMMY |
         bitcoinconsensus_SCRIPT_FLAGS_VERIFY_CHECKLOCKTIMEVERIFY |
         bitcoinconsensus_SCRIPT_FLAGS_VERIFY_CHECKSEQUENCEVERIFY,
 };
@@ -91,4 +88,4 @@ EXPORT_SYMBOL unsigned int bitcoinconsensus_version();
 
 #undef EXPORT_SYMBOL
 
-#endif // BITCOIN_BITCOINCONSENSUS_H
+#endif // BITCOIN_SCRIPT_BITCOINCONSENSUS_H

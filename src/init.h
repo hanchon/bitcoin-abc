@@ -1,11 +1,14 @@
 // Copyright (c) 2009-2010 Satoshi Nakamoto
-// Copyright (c) 2009-2016 The Bitcoin Core developers
-// Copyright (c) 2018 The Bitcoin developers
+// Copyright (c) 2009-2018 The Bitcoin Core developers
+// Copyright (c) 2018-2019 The Bitcoin developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 #ifndef BITCOIN_INIT_H
 #define BITCOIN_INIT_H
+
+#include <node/context.h>
+#include <util/system.h>
 
 #include <memory>
 #include <string>
@@ -16,18 +19,13 @@ class CWallet;
 class HTTPRPCRequestProcessor;
 class RPCServer;
 
-class WalletInitInterface;
-extern WalletInitInterface *const g_wallet_init_interface;
-
 namespace boost {
 class thread_group;
 } // namespace boost
 
-void StartShutdown();
-bool ShutdownRequested();
 /** Interrupt threads */
 void Interrupt();
-void Shutdown();
+void Shutdown(NodeContext &node);
 //! Initialize the logging infrastructure
 void InitLogging();
 //! Parameter interaction: change current parameters depending on various rules
@@ -47,7 +45,7 @@ bool AppInitBasicSetup();
  * @pre Parameters should be parsed and config file should be read,
  * AppInitBasicSetup should have been called.
  */
-bool AppInitParameterInteraction(Config &config, RPCServer &rpcServer);
+bool AppInitParameterInteraction(Config &config);
 /**
  * Initialization sanity checks: ecc init, sanity checks, dir lock.
  * @note This can be done before daemonization.
@@ -70,14 +68,15 @@ bool AppInitLockDataDirectory();
  * @pre Parameters should be parsed and config file should be read,
  * AppInitLockDataDirectory should have been called.
  */
-bool AppInitMain(Config &config,
-                 HTTPRPCRequestProcessor &httpRPCRequestProcessor);
+bool AppInitMain(Config &config, RPCServer &rpcServer,
+                 HTTPRPCRequestProcessor &httpRPCRequestProcessor,
+                 NodeContext &node);
 
-/** The help message mode determines what help message to show */
-enum class HelpMessageMode { BITCOIND, BITCOIN_QT };
+/**
+ * Setup the arguments for gArgs.
+ */
+void SetupServerArgs();
 
-/** Help for options shared between UI and daemon (for -help) */
-std::string HelpMessage(HelpMessageMode mode);
 /** Returns licensing information (for -version) */
 std::string LicenseInfo();
 

@@ -1,9 +1,11 @@
-// Copyright (c) 2018 The Bitcoin developers
+// Copyright (c) 2018-2019 The Bitcoin developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 #ifndef BITCOIN_RWCOLLECTION_H
 #define BITCOIN_RWCOLLECTION_H
+
+#include <threadsafety.h>
 
 #include <boost/noncopyable.hpp>
 #include <boost/range/iterator.hpp>
@@ -37,17 +39,19 @@ public:
     typedef typename boost::range_iterator<T>::type iterator;
     iterator begin() { return std::begin(*collection); }
     iterator end() { return std::end(*collection); }
-    std::reverse_iterator<iterator> rbegin() { return collection->rbegin(); }
-    std::reverse_iterator<iterator> rend() { return collection->rend(); }
+    std::reverse_iterator<iterator> rbegin() {
+        return std::rbegin(*collection);
+    }
+    std::reverse_iterator<iterator> rend() { return std::rend(*collection); }
 
     typedef typename boost::range_iterator<const T>::type const_iterator;
     const_iterator begin() const { return std::begin(*collection); }
     const_iterator end() const { return std::end(*collection); }
     std::reverse_iterator<const_iterator> rbegin() const {
-        return collection->rbegin();
+        return std::rbegin(*collection);
     }
     std::reverse_iterator<const_iterator> rend() const {
-        return collection->rend();
+        return std::rend(*collection);
     }
 
     /**
@@ -60,8 +64,8 @@ public:
 
 template <typename T> class RWCollection {
 private:
+    T collection GUARDED_BY(rwlock);
     mutable boost::shared_mutex rwlock;
-    T collection;
 
 public:
     RWCollection() : collection() {}

@@ -1,12 +1,12 @@
-// Copyright (c) 2011-2016 The Bitcoin Core developers
+// Copyright (c) 2011-2019 The Bitcoin Core developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#include "arith_uint256.h"
-#include "uint256.h"
-#include "version.h"
+#include <arith_uint256.h>
 
-#include "test/test_bitcoin.h"
+#include <uint256.h>
+
+#include <test/setup_common.h>
 
 #include <boost/test/unit_test.hpp>
 
@@ -20,7 +20,7 @@
 BOOST_FIXTURE_TEST_SUITE(arith_uint256_tests, BasicTestingSetup)
 
 /// Convert vector to arith_uint256, via uint256 blob
-inline arith_uint256 arith_uint256V(const std::vector<uint8_t> &vch) {
+static inline arith_uint256 arith_uint256V(const std::vector<uint8_t> &vch) {
     return UintToArith256(uint256(vch));
 }
 
@@ -63,7 +63,7 @@ const arith_uint256 MaxL =
     arith_uint256V(std::vector<uint8_t>(MaxArray, MaxArray + 32));
 
 const arith_uint256 HalfL = (OneL << 255);
-std::string ArrayToString(const uint8_t A[], unsigned int width) {
+static std::string ArrayToString(const uint8_t A[], unsigned int width) {
     std::stringstream Stream;
     Stream << std::hex;
     for (unsigned int i = 0; i < width; ++i) {
@@ -137,8 +137,9 @@ BOOST_AUTO_TEST_CASE(basics) {
     BOOST_CHECK(tmpL == ~MaxL);
 }
 
-void shiftArrayRight(uint8_t *to, const uint8_t *from, unsigned int arrayLength,
-                     unsigned int bitsToShift) {
+static void shiftArrayRight(uint8_t *to, const uint8_t *from,
+                            unsigned int arrayLength,
+                            unsigned int bitsToShift) {
     for (unsigned int T = 0; T < arrayLength; ++T) {
         unsigned int F = (T + bitsToShift / 8);
         if (F < arrayLength) {
@@ -152,8 +153,8 @@ void shiftArrayRight(uint8_t *to, const uint8_t *from, unsigned int arrayLength,
     }
 }
 
-void shiftArrayLeft(uint8_t *to, const uint8_t *from, unsigned int arrayLength,
-                    unsigned int bitsToShift) {
+static void shiftArrayLeft(uint8_t *to, const uint8_t *from,
+                           unsigned int arrayLength, unsigned int bitsToShift) {
     for (unsigned int T = 0; T < arrayLength; ++T) {
         if (T >= bitsToShift / 8) {
             unsigned int F = T - bitsToShift / 8;
@@ -223,13 +224,6 @@ BOOST_AUTO_TEST_CASE(shifts) {
 
 // !    ~    -
 BOOST_AUTO_TEST_CASE(unaryOperators) {
-    BOOST_CHECK(!ZeroL);
-    BOOST_CHECK(!(!OneL));
-    for (unsigned int i = 0; i < 256; ++i)
-        BOOST_CHECK(!(!(OneL << i)));
-    BOOST_CHECK(!(!R1L));
-    BOOST_CHECK(!(!MaxL));
-
     BOOST_CHECK(~ZeroL == MaxL);
 
     uint8_t TmpArray[32];
@@ -241,12 +235,13 @@ BOOST_AUTO_TEST_CASE(unaryOperators) {
 
     BOOST_CHECK(-ZeroL == ZeroL);
     BOOST_CHECK(-R1L == (~R1L) + 1);
-    for (unsigned int i = 0; i < 256; ++i)
+    for (unsigned int i = 0; i < 256; ++i) {
         BOOST_CHECK(-(OneL << i) == (MaxL << i));
+    }
 }
 
 // Check if doing _A_ _OP_ _B_ results in the same as applying _OP_ onto each
-// element of Aarray and Barray, and then converting the result into a
+// element of Aarray and Barray, and then converting the result into an
 // arith_uint256.
 #define CHECKBITWISEOPERATOR(_A_, _B_, _OP_)                                   \
     for (unsigned int i = 0; i < 32; ++i) {                                    \
@@ -433,7 +428,7 @@ BOOST_AUTO_TEST_CASE(divide) {
     BOOST_CHECK_THROW(R2L / ZeroL, uint_error);
 }
 
-bool almostEqual(double d1, double d2) {
+static bool almostEqual(double d1, double d2) {
     return fabs(d1 - d2) <=
            4 * fabs(d1) * std::numeric_limits<double>::epsilon();
 }
@@ -466,9 +461,10 @@ BOOST_AUTO_TEST_CASE(methods) {
         BOOST_CHECK((OneL << i).getdouble() == ldexp(1.0, i));
     }
     BOOST_CHECK(ZeroL.getdouble() == 0.0);
-    for (int i = 256; i > 53; --i)
+    for (int i = 256; i > 53; --i) {
         BOOST_CHECK(
             almostEqual((R1L >> (256 - i)).getdouble(), ldexp(R1Ldouble, i)));
+    }
     uint64_t R1L64part = (R1L >> 192).GetLow64();
     for (int i = 53; i > 0;
          --i) // doubles can store all integers in {0,...,2^54-1} exactly

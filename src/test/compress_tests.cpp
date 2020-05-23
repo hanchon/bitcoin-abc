@@ -1,14 +1,16 @@
-// Copyright (c) 2012-2015 The Bitcoin Core developers
+// Copyright (c) 2012-2019 The Bitcoin Core developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#include "compressor.h"
-#include "test/test_bitcoin.h"
-#include "util.h"
+#include <compressor.h>
 
-#include <cstdint>
+#include <util/system.h>
+
+#include <test/setup_common.h>
 
 #include <boost/test/unit_test.hpp>
+
+#include <cstdint>
 
 // amounts 0.00000001 .. 0.00100000
 #define NUM_MULTIPLES_UNIT 100000
@@ -25,18 +27,15 @@
 BOOST_FIXTURE_TEST_SUITE(compress_tests, BasicTestingSetup)
 
 static bool TestEncode(Amount in) {
-    return in == CTxOutCompressor::DecompressAmount(
-                     CTxOutCompressor::CompressAmount(in));
+    return in == DecompressAmount(CompressAmount(in));
 }
 
 static bool TestDecode(uint64_t in) {
-    return in == CTxOutCompressor::CompressAmount(
-                     CTxOutCompressor::DecompressAmount(in));
+    return in == CompressAmount(DecompressAmount(in));
 }
 
 static bool TestPair(Amount dec, uint64_t enc) {
-    return CTxOutCompressor::CompressAmount(dec) == enc &&
-           CTxOutCompressor::DecompressAmount(enc) == dec;
+    return CompressAmount(dec) == enc && DecompressAmount(enc) == dec;
 }
 
 BOOST_AUTO_TEST_CASE(compress_amounts) {

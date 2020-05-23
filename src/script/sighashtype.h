@@ -2,10 +2,10 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#ifndef BITCOIN_SCRIPT_HASH_TYPE_H
-#define BITCOIN_SCRIPT_HASH_TYPE_H
+#ifndef BITCOIN_SCRIPT_SIGHASHTYPE_H
+#define BITCOIN_SCRIPT_SIGHASHTYPE_H
 
-#include "serialize.h"
+#include <serialize.h>
 
 #include <cstdint>
 #include <stdexcept>
@@ -85,6 +85,23 @@ public:
     template <typename Stream> void Serialize(Stream &s) const {
         ::Serialize(s, getRawSigHashType());
     }
+
+    template <typename Stream> void Unserialize(Stream &s) {
+        ::Unserialize(s, sigHash);
+    }
+
+    /**
+     * Handy operators.
+     */
+    friend constexpr bool operator==(const SigHashType &a,
+                                     const SigHashType &b) {
+        return a.sigHash == b.sigHash;
+    }
+
+    friend constexpr bool operator!=(const SigHashType &a,
+                                     const SigHashType &b) {
+        return !(a == b);
+    }
 };
 
-#endif // BITCOIN_SCRIPT_HASH_TYPE_H
+#endif // BITCOIN_SCRIPT_SIGHASHTYPE_H

@@ -2,16 +2,14 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#include "winshutdownmonitor.h"
+#include <qt/winshutdownmonitor.h>
 
 #if defined(Q_OS_WIN)
-#include <init.h>
-#include <util.h>
-
-#include <openssl/rand.h>
-#include <windows.h>
+#include <shutdown.h>
 
 #include <QDebug>
+
+#include <windows.h>
 
 // If we don't want a message to be processed by Qt, return true and set result
 // to the value that the window procedure should return. Otherwise return false.
@@ -20,19 +18,6 @@ bool WinShutdownMonitor::nativeEventFilter(const QByteArray &eventType,
     Q_UNUSED(eventType);
 
     MSG *pMsg = static_cast<MSG *>(pMessage);
-
-    // Seed OpenSSL PRNG with Windows event data (e.g.  mouse movements and
-    // other user interactions)
-    if (RAND_event(pMsg->message, pMsg->wParam, pMsg->lParam) == 0) {
-        // Warn only once as this is performance-critical
-        static bool warned = false;
-        if (!warned) {
-            LogPrintf("%s: OpenSSL RAND_event() failed to seed OpenSSL PRNG "
-                      "with enough data.\n",
-                      __func__);
-            warned = true;
-        }
-    }
 
     switch (pMsg->message) {
         case WM_QUERYENDSESSION: {

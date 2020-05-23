@@ -1,15 +1,15 @@
-// Copyright (c) 2018 The Bitcoin developers
+// Copyright (c) 2018-2019 The Bitcoin developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#include "blockvalidity.h"
-#include "chain.h"
-#include "diskblockpos.h"
-#include "uint256.h"
+#include <blockvalidity.h>
+#include <chain.h>
+#include <uint256.h>
 
-#include "test/test_bitcoin.h"
+#include <test/setup_common.h>
 
 #include <boost/test/unit_test.hpp>
+
 #include <limits>
 
 BOOST_FIXTURE_TEST_SUITE(blockindex_tests, BasicTestingSetup)
@@ -68,20 +68,20 @@ BOOST_AUTO_TEST_CASE(get_disk_positions) {
             }
 
             // Data and undo positions should be unmodified
-            CDiskBlockPos dataPosition = index.GetBlockPos();
+            FlatFilePos dataPosition = index.GetBlockPos();
             if (flags & 0x01) {
                 BOOST_CHECK(dataPosition.nFile == expectedFile);
                 BOOST_CHECK(dataPosition.nPos == expectedDataPosition);
             } else {
-                BOOST_CHECK(dataPosition == CDiskBlockPos());
+                BOOST_CHECK(dataPosition == FlatFilePos());
             }
 
-            CDiskBlockPos undoPosition = index.GetUndoPos();
+            FlatFilePos undoPosition = index.GetUndoPos();
             if (flags & 0x02) {
                 BOOST_CHECK(undoPosition.nFile == expectedFile);
                 BOOST_CHECK(undoPosition.nPos == expectedUndoPosition);
             } else {
-                BOOST_CHECK(undoPosition == CDiskBlockPos());
+                BOOST_CHECK(undoPosition == FlatFilePos());
             }
         }
     }
@@ -91,18 +91,17 @@ BOOST_AUTO_TEST_CASE(get_block_hash) {
     CBlockIndex index = CBlockIndex();
 
     /* Test with all 0 hash */
-    const uint256 zeroHash = uint256();
+    const BlockHash zeroHash = BlockHash();
     index.phashBlock = &zeroHash;
-    uint256 hash = index.GetBlockHash();
+    BlockHash hash = index.GetBlockHash();
     BOOST_CHECK(hash == zeroHash);
 
     /* Test with a random hash */
-    std::vector<uint8_t> hashBytes(32);
-
+    uint256 hashBytes;
     std::generate(hashBytes.begin(), hashBytes.end(),
                   []() { return uint8_t(rand() % 255); });
 
-    const uint256 randomHash = uint256(hashBytes);
+    const BlockHash randomHash = BlockHash(hashBytes);
     index.phashBlock = &randomHash;
     hash = index.GetBlockHash();
     BOOST_CHECK(hash == randomHash);
@@ -189,7 +188,7 @@ BOOST_AUTO_TEST_CASE(to_string) {
     header.hashMerkleRoot = uint256();
 
     CBlockIndex index = CBlockIndex(header);
-    const uint256 hashBlock = uint256();
+    const BlockHash hashBlock = BlockHash();
     index.phashBlock = &hashBlock;
     index.nHeight = 123;
 
@@ -254,7 +253,7 @@ BOOST_AUTO_TEST_CASE(to_string) {
         "hashBlock="
         "000000000000000000000000000000000000000000000000fedcba9876543210)",
         &indexPrev);
-    const uint256 emptyHashBlock = uint256S("FEDCBA9876543210");
+    const BlockHash emptyHashBlock = BlockHash::fromHex("FEDCBA9876543210");
     index.phashBlock = &emptyHashBlock;
     indexString = index.ToString();
     BOOST_CHECK_EQUAL(indexString, expectedString);

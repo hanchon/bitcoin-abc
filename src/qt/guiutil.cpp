@@ -2,26 +2,24 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#include "guiutil.h"
+#include <qt/guiutil.h>
 
-#include "bitcoinaddressvalidator.h"
-#include "bitcoinunits.h"
-#include "dstencode.h"
-#include "qvalidatedlineedit.h"
-#include "walletmodel.h"
-
-#include "cashaddr.h"
-#include "config.h"
-#include "dstencode.h"
-#include "fs.h"
-#include "init.h"
-#include "policy/policy.h"
-#include "primitives/transaction.h"
-#include "protocol.h"
-#include "script/script.h"
-#include "script/standard.h"
-#include "util.h"
-#include "utilstrencodings.h"
+#include <cashaddrenc.h>
+#include <chainparams.h>
+#include <fs.h>
+#include <interfaces/node.h>
+#include <key_io.h>
+#include <policy/policy.h>
+#include <primitives/transaction.h>
+#include <protocol.h>
+#include <qt/bitcoinaddressvalidator.h>
+#include <qt/bitcoinunits.h>
+#include <qt/qvalidatedlineedit.h>
+#include <qt/walletmodel.h>
+#include <script/script.h>
+#include <script/standard.h>
+#include <util/strencodings.h>
+#include <util/system.h>
 
 #ifdef WIN32
 #ifdef _WIN32_WINNT
@@ -36,24 +34,20 @@
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
-#include "shellapi.h"
-#include "shlobj.h"
-#include "shlwapi.h"
+#include <shellapi.h>
+#include <shlobj.h>
+#include <shlwapi.h>
 #endif
-
-#include <boost/filesystem/detail/utf8_codecvt_facet.hpp>
-#include <boost/filesystem/fstream.hpp>
-#include <boost/scoped_array.hpp>
 
 #include <QAbstractItemView>
 #include <QApplication>
 #include <QClipboard>
 #include <QDateTime>
 #include <QDesktopServices>
-#include <QDesktopWidget>
 #include <QDoubleValidator>
 #include <QFileDialog>
 #include <QFont>
+#include <QKeyEvent>
 #include <QLineEdit>
 #include <QMouseEvent>
 #include <QSettings>
@@ -65,20 +59,13 @@
 #include <QFontDatabase>
 #endif
 
-static fs::detail::utf8_codecvt_facet utf8;
-
 #if defined(Q_OS_MAC)
-// These Mac includes must be done in the global namespace
-#include <CoreFoundation/CoreFoundation.h>
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+
 #include <CoreServices/CoreServices.h>
 
-extern double NSAppKitVersionNumber;
-#if !defined(NSAppKitVersionNumber10_8)
-#define NSAppKitVersionNumber10_8 1187
-#endif
-#if !defined(NSAppKitVersionNumber10_9)
-#define NSAppKitVersionNumber10_9 1265
-#endif
+void ForceActivation();
 #endif
 
 namespace GUIUtil {
@@ -102,45 +89,43 @@ QFont fixedPitchFont() {
 #endif
 }
 
-static std::string MakeAddrInvalid(std::string addr, const Config &config) {
+static std::string MakeAddrInvalid(std::string addr,
+                                   const CChainParams &params) {
     if (addr.size() < 2) {
         return "";
     }
 
     // Checksum is at the end of the address. Swapping chars to make it invalid.
     std::swap(addr[addr.size() - 1], addr[addr.size() - 2]);
-    if (!IsValidDestinationString(addr, config.GetChainParams())) {
+    if (!IsValidDestinationString(addr, params)) {
         return addr;
     }
 
     return "";
 }
 
-std::string DummyAddress(const Config &config) {
-    // Just some dummy data to generate an convincing random-looking (but
+std::string DummyAddress(const CChainParams &params) {
+    // Just some dummy data to generate a convincing random-looking (but
     // consistent) address
     static const std::vector<uint8_t> dummydata = {
         0xeb, 0x15, 0x23, 0x1d, 0xfc, 0xeb, 0x60, 0x92, 0x58, 0x86,
         0xb6, 0x7d, 0x06, 0x52, 0x99, 0x92, 0x59, 0x15, 0xae, 0xb1};
 
     const CTxDestination dstKey = CKeyID(uint160(dummydata));
-    return MakeAddrInvalid(EncodeDestination(dstKey, config), config);
+    return MakeAddrInvalid(EncodeCashAddr(dstKey, params), params);
 }
 
 // Addresses are stored in the database with the encoding that the client was
 // configured with at the time of creation.
 //
-// This converts to clients current configuration.
-QString convertToConfiguredAddressFormat(const Config &config,
-                                         const QString &addr) {
-    if (!IsValidDestinationString(addr.toStdString(),
-                                  config.GetChainParams())) {
+// This converts to cashaddr.
+QString convertToCashAddr(const CChainParams &params, const QString &addr) {
+    if (!IsValidDestinationString(addr.toStdString(), params)) {
         // We have something sketchy as input. Do not try to convert.
         return addr;
     }
-    CTxDestination dst =
-        DecodeDestination(addr.toStdString(), config.GetChainParams());
-    return QString::fromStdString(EncodeDestination(dst, config));
+    CTxDestination dst = DecodeDestination(addr.toStdString(), params);
+    return QString::fromStdString(EncodeCashAddr(dst, params));
 }
 
 void setupAddressWidget(QValidatedLineEdit *widget, QWidget *parent) {
@@ -151,36 +136,10 @@ void setupAddressWidget(QValidatedLineEdit *widget, QWidget *parent) {
     // and this is the only place, where this address is supplied.
     widget->setPlaceholderText(
         QObject::tr("Enter a Bitcoin address (e.g. %1)")
-            .arg(QString::fromStdString(DummyAddress(GetConfig()))));
+            .arg(QString::fromStdString(DummyAddress(Params()))));
     widget->setValidator(
         new BitcoinAddressEntryValidator(Params().CashAddrPrefix(), parent));
     widget->setCheckValidator(new BitcoinAddressCheckValidator(parent));
-}
-
-void setupAmountWidget(QLineEdit *widget, QWidget *parent) {
-    QDoubleValidator *amountValidator = new QDoubleValidator(parent);
-    amountValidator->setDecimals(8);
-    amountValidator->setBottom(0.0);
-    widget->setValidator(amountValidator);
-    widget->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-}
-
-QString bitcoinURIScheme(const CChainParams &params, bool useCashAddr) {
-    if (!useCashAddr) {
-        return "bitcoincash";
-    }
-    return QString::fromStdString(params.CashAddrPrefix());
-}
-
-QString bitcoinURIScheme(const Config &config) {
-    return bitcoinURIScheme(config.GetChainParams(),
-                            config.UseCashAddrEncoding());
-}
-
-static bool IsCashAddrEncoded(const QUrl &uri) {
-    const std::string addr = (uri.scheme() + ":" + uri.path()).toStdString();
-    auto decoded = cashaddr::Decode(addr, "");
-    return !decoded.first.empty();
 }
 
 bool parseBitcoinURI(const QString &scheme, const QUrl &uri,
@@ -191,12 +150,8 @@ bool parseBitcoinURI(const QString &scheme, const QUrl &uri,
     }
 
     SendCoinsRecipient rv;
-    if (IsCashAddrEncoded(uri)) {
-        rv.address = uri.scheme() + ":" + uri.path();
-    } else {
-        // strip out uri scheme for base58 encoded addresses
-        rv.address = uri.path();
-    }
+    rv.address = uri.scheme() + ":" + uri.path();
+
     // Trim any following forward slash which may have been added by the OS
     if (rv.address.endsWith("/")) {
         rv.address.truncate(rv.address.length() - 1);
@@ -253,12 +208,13 @@ bool parseBitcoinURI(const QString &scheme, QString uri,
     return parseBitcoinURI(scheme, uriInstance, out);
 }
 
-QString formatBitcoinURI(const Config &config, const SendCoinsRecipient &info) {
-    QString ret = info.address;
-    if (!config.UseCashAddrEncoding()) {
-        // prefix address with uri scheme for base58 encoded addresses.
-        ret = (bitcoinURIScheme(config) + ":%1").arg(ret);
-    }
+QString formatBitcoinURI(const SendCoinsRecipient &info) {
+    return formatBitcoinURI(Params(), info);
+}
+
+QString formatBitcoinURI(const CChainParams &params,
+                         const SendCoinsRecipient &info) {
+    QString ret = convertToCashAddr(params, info.address);
     int paramCount = 0;
 
     if (info.amount != Amount::zero()) {
@@ -285,12 +241,12 @@ QString formatBitcoinURI(const Config &config, const SendCoinsRecipient &info) {
     return ret;
 }
 
-bool isDust(const QString &address, const Amount amount,
+bool isDust(interfaces::Node &node, const QString &address, const Amount amount,
             const CChainParams &chainParams) {
     CTxDestination dest = DecodeDestination(address.toStdString(), chainParams);
     CScript script = GetScriptForDestination(dest);
     CTxOut txOut(amount, script);
-    return txOut.IsDust(dustRelayFee);
+    return IsDust(txOut, node.getDustRelayFee());
 }
 
 QString HtmlEscape(const QString &str, bool fMultiLine) {
@@ -420,6 +376,23 @@ bool isObscured(QWidget *w) {
              checkPoint(QPoint(w->width() / 2, w->height() / 2), w));
 }
 
+void bringToFront(QWidget *w) {
+#ifdef Q_OS_MAC
+    ForceActivation();
+#endif
+
+    if (w) {
+        // activateWindow() (sometimes) helps with keyboard focus on Windows
+        if (w->isMinimized()) {
+            w->showNormal();
+        } else {
+            w->show();
+        }
+        w->activateWindow();
+        w->raise();
+    }
+}
+
 void openDebugLogfile() {
     fs::path pathDebug = GetDataDir() / "debug.log";
 
@@ -430,46 +403,22 @@ void openDebugLogfile() {
     }
 }
 
-void SubstituteFonts(const QString &language) {
-#if defined(Q_OS_MAC)
-// Background:
-// OSX's default font changed in 10.9 and Qt is unable to find it with its
-// usual fallback methods when building against the 10.7 sdk or lower.
-// The 10.8 SDK added a function to let it find the correct fallback font.
-// If this fallback is not properly loaded, some characters may fail to
-// render correctly.
-//
-// The same thing happened with 10.10. .Helvetica Neue DeskInterface is now
-// default.
-//
-// Solution: If building with the 10.7 SDK or lower and the user's platform
-// is 10.9 or higher at runtime, substitute the correct font. This needs to
-// happen before the QApplication is created.
-#if defined(MAC_OS_X_VERSION_MAX_ALLOWED) &&                                   \
-    MAC_OS_X_VERSION_MAX_ALLOWED < MAC_OS_X_VERSION_10_8
-    if (floor(NSAppKitVersionNumber) > NSAppKitVersionNumber10_8) {
-        if (floor(NSAppKitVersionNumber) <= NSAppKitVersionNumber10_9) {
-            /* On a 10.9 - 10.9.x system */
-            QFont::insertSubstitution(".Lucida Grande UI", "Lucida Grande");
-        } else {
-            /* 10.10 or later system */
-            if (language == "zh_CN" || language == "zh_TW" ||
-                language == "zh_HK") {
-                // traditional or simplified Chinese
-                QFont::insertSubstitution(".Helvetica Neue DeskInterface",
-                                          "Heiti SC");
-            } else if (language == "ja") {
-                // Japanesee
-                QFont::insertSubstitution(".Helvetica Neue DeskInterface",
-                                          "Songti SC");
-            } else {
-                QFont::insertSubstitution(".Helvetica Neue DeskInterface",
-                                          "Lucida Grande");
-            }
-        }
+bool openBitcoinConf() {
+    fs::path pathConfig =
+        GetConfigFile(gArgs.GetArg("-conf", BITCOIN_CONF_FILENAME));
+
+    /* Create the file */
+    fsbridge::ofstream configFile(pathConfig, std::ios_base::app);
+
+    if (!configFile.good()) {
+        return false;
     }
-#endif
-#endif
+
+    configFile.close();
+
+    /* Open bitcoin.conf with the associated application */
+    return QDesktopServices::openUrl(
+        QUrl::fromLocalFile(boostPathToQString(pathConfig)));
 }
 
 ToolTipToRichTextFilter::ToolTipToRichTextFilter(int _size_threshold,
@@ -493,22 +442,20 @@ bool ToolTipToRichTextFilter::eventFilter(QObject *obj, QEvent *evt) {
 }
 
 void TableViewLastColumnResizingFixer::connectViewHeadersSignals() {
-    connect(tableView->horizontalHeader(),
-            SIGNAL(sectionResized(int, int, int)), this,
-            SLOT(on_sectionResized(int, int, int)));
-    connect(tableView->horizontalHeader(), SIGNAL(geometriesChanged()), this,
-            SLOT(on_geometriesChanged()));
+    connect(tableView->horizontalHeader(), &QHeaderView::sectionResized, this,
+            &TableViewLastColumnResizingFixer::on_sectionResized);
+    connect(tableView->horizontalHeader(), &QHeaderView::geometriesChanged,
+            this, &TableViewLastColumnResizingFixer::on_geometriesChanged);
 }
 
 // We need to disconnect these while handling the resize events, otherwise we
 // can enter infinite loops.
 void TableViewLastColumnResizingFixer::disconnectViewHeadersSignals() {
-    disconnect(tableView->horizontalHeader(),
-               SIGNAL(sectionResized(int, int, int)), this,
-               SLOT(on_sectionResized(int, int, int)));
-    disconnect(tableView->horizontalHeader(), SIGNAL(geometriesChanged()), this,
-               SLOT(on_geometriesChanged()));
-}
+    disconnect(tableView->horizontalHeader(), &QHeaderView::sectionResized,
+               this, &TableViewLastColumnResizingFixer::on_sectionResized);
+    disconnect(tableView->horizontalHeader(), &QHeaderView::geometriesChanged,
+               this, &TableViewLastColumnResizingFixer::on_geometriesChanged);
+} // namespace GUIUtil
 
 // Setup the resize mode, handles compatibility for Qt5 and below as the method
 // signatures changed.
@@ -638,41 +585,28 @@ bool SetStartOnSystemStartup(bool fAutoStart) {
         CoInitialize(nullptr);
 
         // Get a pointer to the IShellLink interface.
-        IShellLink *psl = nullptr;
+        IShellLinkW *psl = nullptr;
         HRESULT hres =
             CoCreateInstance(CLSID_ShellLink, nullptr, CLSCTX_INPROC_SERVER,
-                             IID_IShellLink, reinterpret_cast<void **>(&psl));
+                             IID_IShellLinkW, reinterpret_cast<void **>(&psl));
 
         if (SUCCEEDED(hres)) {
             // Get the current executable path
-            TCHAR pszExePath[MAX_PATH];
-            GetModuleFileName(nullptr, pszExePath, sizeof(pszExePath));
+            WCHAR pszExePath[MAX_PATH];
+            GetModuleFileNameW(nullptr, pszExePath, ARRAYSIZE(pszExePath));
 
             // Start client minimized
             QString strArgs = "-min";
             // Set -testnet /-regtest options
-            strArgs += QString::fromStdString(strprintf(
-                " -testnet=%d -regtest=%d", gArgs.GetBoolArg("-testnet", false),
-                gArgs.GetBoolArg("-regtest", false)));
-
-#ifdef UNICODE
-            boost::scoped_array<TCHAR> args(new TCHAR[strArgs.length() + 1]);
-            // Convert the QString to TCHAR*
-            strArgs.toWCharArray(args.get());
-            // Add missing '\0'-termination to string
-            args[strArgs.length()] = '\0';
-#endif
+            strArgs += QString::fromStdString(
+                strprintf(" -chain=%s", gArgs.GetChainName()));
 
             // Set the path to the shortcut target
             psl->SetPath(pszExePath);
-            PathRemoveFileSpec(pszExePath);
+            PathRemoveFileSpecW(pszExePath);
             psl->SetWorkingDirectory(pszExePath);
             psl->SetShowCmd(SW_SHOWMINNOACTIVE);
-#ifndef UNICODE
-            psl->SetArguments(strArgs.toStdString().c_str());
-#else
-            psl->SetArguments(args.get());
-#endif
+            psl->SetArguments(strArgs.toStdWString().c_str());
 
             // Query IShellLink for the IPersistFile interface for
             // saving the shortcut in persistent storage.
@@ -680,13 +614,8 @@ bool SetStartOnSystemStartup(bool fAutoStart) {
             hres = psl->QueryInterface(IID_IPersistFile,
                                        reinterpret_cast<void **>(&ppf));
             if (SUCCEEDED(hres)) {
-                WCHAR pwsz[MAX_PATH];
-                // Ensure that the string is ANSI.
-                MultiByteToWideChar(CP_ACP, 0,
-                                    StartupShortcutPath().string().c_str(), -1,
-                                    pwsz, MAX_PATH);
                 // Save the link by calling IPersistFile::Save.
-                hres = ppf->Save(pwsz, TRUE);
+                hres = ppf->Save(StartupShortcutPath().wstring().c_str(), TRUE);
                 ppf->Release();
                 psl->Release();
                 CoUninitialize();
@@ -725,7 +654,7 @@ static fs::path GetAutostartFilePath() {
 }
 
 bool GetStartOnSystemStartup() {
-    fs::ifstream optionFile(GetAutostartFilePath());
+    fsbridge::ifstream optionFile(GetAutostartFilePath());
     if (!optionFile.good()) {
         return false;
     }
@@ -748,16 +677,17 @@ bool SetStartOnSystemStartup(bool fAutoStart) {
         fs::remove(GetAutostartFilePath());
     } else {
         char pszExePath[MAX_PATH + 1];
-        memset(pszExePath, 0, sizeof(pszExePath));
-        if (readlink("/proc/self/exe", pszExePath, sizeof(pszExePath) - 1) ==
-            -1) {
+        ssize_t r =
+            readlink("/proc/self/exe", pszExePath, sizeof(pszExePath) - 1);
+        if (r == -1) {
             return false;
         }
+        pszExePath[r] = '\0';
 
         fs::create_directories(GetAutostartDir());
 
-        fs::ofstream optionFile(GetAutostartFilePath(),
-                                std::ios_base::out | std::ios_base::trunc);
+        fsbridge::ofstream optionFile(
+            GetAutostartFilePath(), std::ios_base::out | std::ios_base::trunc);
         if (!optionFile.good()) {
             return false;
         }
@@ -771,9 +701,7 @@ bool SetStartOnSystemStartup(bool fAutoStart) {
             optionFile << strprintf("Name=Bitcoin (%s)\n", chain);
         }
         optionFile << "Exec=" << pszExePath
-                   << strprintf(" -min -testnet=%d -regtest=%d\n",
-                                gArgs.GetBoolArg("-testnet", false),
-                                gArgs.GetBoolArg("-regtest", false));
+                   << strprintf(" -min -chain=%s\n", chain);
         optionFile << "Terminal=false\n";
         optionFile << "Hidden=false\n";
         optionFile.close();
@@ -782,8 +710,6 @@ bool SetStartOnSystemStartup(bool fAutoStart) {
 }
 
 #elif defined(Q_OS_MAC)
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
 // based on:
 // https://github.com/Mozketo/LaunchAtLoginController/blob/master/LaunchAtLoginController.m
 
@@ -889,11 +815,11 @@ void setClipboard(const QString &str) {
 }
 
 fs::path qstringToBoostPath(const QString &path) {
-    return fs::path(path.toStdString(), utf8);
+    return fs::path(path.toStdString());
 }
 
 QString boostPathToQString(const fs::path &path) {
-    return QString::fromStdString(path.string(utf8));
+    return QString::fromStdString(path.string());
 }
 
 QString formatDurationStr(int secs) {
@@ -1000,12 +926,43 @@ QString formatNiceTimeOffset(qint64 secs) {
     return timeBehindText;
 }
 
+QString formatBytes(uint64_t bytes) {
+    if (bytes < 1024) {
+        return QString(QObject::tr("%1 B")).arg(bytes);
+    }
+    if (bytes < 1024 * 1024) {
+        return QString(QObject::tr("%1 KB")).arg(bytes / 1024);
+    }
+    if (bytes < 1024 * 1024 * 1024) {
+        return QString(QObject::tr("%1 MB")).arg(bytes / 1024 / 1024);
+    }
+
+    return QString(QObject::tr("%1 GB")).arg(bytes / 1024 / 1024 / 1024);
+}
+
 void ClickableLabel::mouseReleaseEvent(QMouseEvent *event) {
     Q_EMIT clicked(event->pos());
 }
 
 void ClickableProgressBar::mouseReleaseEvent(QMouseEvent *event) {
     Q_EMIT clicked(event->pos());
+}
+
+bool ItemDelegate::eventFilter(QObject *object, QEvent *event) {
+    if (event->type() == QEvent::KeyPress) {
+        if (static_cast<QKeyEvent *>(event)->key() == Qt::Key_Escape) {
+            Q_EMIT keyEscapePressed();
+        }
+    }
+    return QItemDelegate::eventFilter(object, event);
+}
+
+int TextWidth(const QFontMetrics &fm, const QString &text) {
+#if (QT_VERSION >= QT_VERSION_CHECK(5, 11, 0))
+    return fm.horizontalAdvance(text);
+#else
+    return fm.width(text);
+#endif
 }
 
 } // namespace GUIUtil

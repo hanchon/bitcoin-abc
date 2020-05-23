@@ -1,15 +1,15 @@
-// Copyright (c) 2018 The Bitcoin developers
+// Copyright (c) 2018-2019 The Bitcoin developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#include "avalanche.h"
+#include <avalanche.h>
 
-#include "chain.h"
-#include "config/bitcoin-config.h"
-#include "netmessagemaker.h"
-#include "reverse_iterator.h"
-#include "scheduler.h"
-#include "validation.h"
+#include <chain.h>
+#include <netmessagemaker.h>
+#include <reverse_iterator.h>
+#include <scheduler.h>
+#include <util/bitmanip.h>
+#include <validation.h>
 
 #include <tuple>
 
@@ -18,27 +18,9 @@
  */
 static const int64_t AVALANCHE_TIME_STEP_MILLISECONDS = 10;
 
-/**
- * Maximum item count that can be polled at once.
- */
-static const size_t AVALANCHE_MAX_ELEMENT_POLL = 4096;
-
-static uint32_t countBits(uint32_t v) {
-#if HAVE_DECL___BUILTIN_POPCOUNT
-    return __builtin_popcount(v);
-#else
-    /**
-     * Computes the number of bits set in each group of 8bits then uses a
-     * multiplication to sum all of them in the 8 most significant bits and
-     * return these.
-     * More detailed explanation can be found at
-     * https://www.playingwithpointers.com/blog/swar.html
-     */
-    v = v - ((v >> 1) & 0x55555555);
-    v = (v & 0x33333333) + ((v >> 2) & 0x33333333);
-    return (((v + (v >> 4)) & 0xF0F0F0F) * 0x1010101) >> 24;
-#endif
-}
+// Unfortunately, the bitcoind codebase is full of global and we are kinda
+// forced into it here.
+std::unique_ptr<AvalancheProcessor> g_avalanche;
 
 bool VoteRecord::registerVote(NodeId nodeid, uint32_t error) {
     // We just got a new vote, so there is one less inflight request.
@@ -95,7 +77,8 @@ bool VoteRecord::addNodeToQuorum(NodeId nodeid) {
     }
 
     // MMIX Linear Congruent Generator.
-    const uint64_t r1 = 6364136223846793005 * nodeid + 1442695040888963407;
+    const uint64_t r1 =
+        6364136223846793005 * uint64_t(nodeid) + 1442695040888963407;
     // Fibonacci hashing.
     const uint64_t r2 = 11400714819323198485ull * (nodeid ^ seed);
     // Combine and extract hash.
@@ -145,6 +128,19 @@ static bool IsWorthPolling(const CBlockIndex *pindex) {
     return true;
 }
 
+AvalancheProcessor::AvalancheProcessor(CConnman *connmanIn)
+    : connman(connmanIn),
+      queryTimeoutDuration(
+          AVALANCHE_DEFAULT_QUERY_TIMEOUT_DURATION_MILLISECONDS),
+      round(0) {
+    // Pick a random key for the session.
+    sessionKey.MakeNewKey(true);
+}
+
+AvalancheProcessor::~AvalancheProcessor() {
+    stopEventLoop();
+}
+
 bool AvalancheProcessor::addBlockToReconcile(const CBlockIndex *pindex) {
     bool isAccepted;
 
@@ -155,7 +151,7 @@ bool AvalancheProcessor::addBlockToReconcile(const CBlockIndex *pindex) {
             return false;
         }
 
-        isAccepted = chainActive.Contains(pindex);
+        isAccepted = ::ChainActive().Contains(pindex);
     }
 
     return vote_records.getWriteView()
@@ -181,6 +177,53 @@ int AvalancheProcessor::getConfidence(const CBlockIndex *pindex) const {
     }
 
     return it->second.getConfidence();
+}
+
+namespace {
+/**
+ * When using TCP, we need to sign all messages as the transport layer is not
+ * secure.
+ */
+class TCPAvalancheResponse {
+    AvalancheResponse response;
+    std::array<uint8_t, 64> sig;
+
+public:
+    TCPAvalancheResponse(AvalancheResponse responseIn, const CKey &key)
+        : response(std::move(responseIn)) {
+        CHashWriter hasher(SER_GETHASH, 0);
+        hasher << response;
+        const uint256 hash = hasher.GetHash();
+
+        // Now let's sign!
+        std::vector<uint8_t> vchSig;
+        if (key.SignSchnorr(hash, vchSig)) {
+            // Schnorr sigs are 64 bytes in size.
+            assert(vchSig.size() == 64);
+            std::copy(vchSig.begin(), vchSig.end(), sig.begin());
+        } else {
+            sig.fill(0);
+        }
+    }
+
+    // serialization support
+    ADD_SERIALIZE_METHODS;
+
+    template <typename Stream, typename Operation>
+    inline void SerializationOp(Stream &s, Operation ser_action) {
+        READWRITE(response);
+        READWRITE(sig);
+    }
+};
+} // namespace
+
+void AvalancheProcessor::sendResponse(CNode *pfrom,
+                                      AvalancheResponse response) const {
+    connman->PushMessage(
+        pfrom,
+        CNetMsgMaker(pfrom->GetSendVersion())
+            .Make(NetMsgType::AVARESPONSE,
+                  TCPAvalancheResponse(std::move(response), sessionKey)));
 }
 
 bool AvalancheProcessor::registerVotes(
@@ -238,8 +281,8 @@ bool AvalancheProcessor::registerVotes(
 
     {
         LOCK(cs_main);
-        for (auto &v : votes) {
-            BlockMap::iterator mi = mapBlockIndex.find(v.GetHash());
+        for (const auto &v : votes) {
+            BlockMap::iterator mi = mapBlockIndex.find(BlockHash(v.GetHash()));
             if (mi == mapBlockIndex.end()) {
                 // This should not happen, but just in case...
                 continue;
@@ -258,7 +301,7 @@ bool AvalancheProcessor::registerVotes(
     {
         // Register votes.
         auto w = vote_records.getWriteView();
-        for (auto &p : responseIndex) {
+        for (const auto &p : responseIndex) {
             CBlockIndex *pindex = p.first;
             const AvalancheVote &v = p.second;
 
@@ -297,58 +340,31 @@ bool AvalancheProcessor::registerVotes(
     return true;
 }
 
-bool AvalancheProcessor::addPeer(NodeId nodeid, int64_t score) {
+bool AvalancheProcessor::addPeer(NodeId nodeid, int64_t score, CPubKey pubkey) {
     return peerSet.getWriteView()
-        ->insert({nodeid, score, std::chrono::steady_clock::now()})
+        ->insert({nodeid, score, std::chrono::steady_clock::now(),
+                  std::move(pubkey)})
         .second;
 }
 
-bool AvalancheProcessor::startEventLoop(CScheduler &scheduler) {
-    LOCK(cs_running);
-    if (running) {
-        // Do not start the event loop twice.
-        return false;
+CPubKey AvalancheProcessor::getPubKey(NodeId nodeid) const {
+    auto r = peerSet.getReadView();
+    auto it = r->find(nodeid);
+    if (it == r->end()) {
+        return CPubKey();
     }
 
-    running = true;
+    return it->pubkey;
+}
 
-    // Start the event loop.
-    scheduler.scheduleEvery(
-        [this]() -> bool {
-            runEventLoop();
-            if (!stopRequest) {
-                return true;
-            }
-
-            LOCK(cs_running);
-            running = false;
-
-            cond_running.notify_all();
-
-            // A stop request was made.
-            return false;
-        },
+bool AvalancheProcessor::startEventLoop(CScheduler &scheduler) {
+    return eventLoop.startEventLoop(
+        scheduler, [this]() { this->runEventLoop(); },
         AVALANCHE_TIME_STEP_MILLISECONDS);
-
-    return true;
 }
 
 bool AvalancheProcessor::stopEventLoop() {
-    WAIT_LOCK(cs_running, lock);
-    if (!running) {
-        return false;
-    }
-
-    // Request avalanche to stop.
-    stopRequest = true;
-
-    // Wait for avalanche to stop.
-    cond_running.wait(lock, [this]() EXCLUSIVE_LOCKS_REQUIRED(cs_running) {
-        return !running;
-    });
-
-    stopRequest = false;
-    return true;
+    return eventLoop.stopEventLoop();
 }
 
 std::vector<CInv> AvalancheProcessor::getInvsForNextPoll(bool forPoll) const {
@@ -409,7 +425,7 @@ void AvalancheProcessor::clearTimedoutRequests() {
         auto w = queries.getWriteView();
         auto it = w->get<query_timeout>().begin();
         while (it != w->get<query_timeout>().end() && it->timeout < now) {
-            for (auto &i : it->invs) {
+            for (const auto &i : it->invs) {
                 timedout_items[i]++;
             }
 
@@ -430,7 +446,7 @@ void AvalancheProcessor::clearTimedoutRequests() {
 
         {
             LOCK(cs_main);
-            BlockMap::iterator mi = mapBlockIndex.find(inv.hash);
+            BlockMap::iterator mi = mapBlockIndex.find(BlockHash(inv.hash));
             if (mi == mapBlockIndex.end()) {
                 continue;
             }
@@ -453,24 +469,24 @@ void AvalancheProcessor::runEventLoop() {
     // them.
     clearTimedoutRequests();
 
-    while (true) {
-        NodeId nodeid = getSuitableNodeToQuery();
-        if (nodeid == NO_NODE) {
-            return;
-        }
+    // Make sure there is at least one suitable node to query before gathering
+    // invs.
+    NodeId nodeid = getSuitableNodeToQuery();
+    if (nodeid == NO_NODE) {
+        return;
+    }
+    std::vector<CInv> invs = getInvsForNextPoll();
+    if (invs.empty()) {
+        return;
+    }
 
+    do {
         /**
          * If we lost contact to that node, then we remove it from nodeids, but
          * never add the request to queries, which ensures bad nodes get cleaned
          * up over time.
          */
-        std::vector<CInv> invs;
         bool hasSent = connman->ForNode(nodeid, [this, &invs](CNode *pnode) {
-            invs = getInvsForNextPoll();
-            if (invs.empty()) {
-                return false;
-            }
-
             uint64_t current_round = round++;
 
             {
@@ -500,11 +516,14 @@ void AvalancheProcessor::runEventLoop() {
         });
 
         // Success!
-        if (hasSent || invs.empty()) {
+        if (hasSent) {
             return;
         }
 
         // This node is obsolete, delete it.
         peerSet.getWriteView()->erase(nodeid);
-    }
+
+        // Get next suitable node to try again
+        nodeid = getSuitableNodeToQuery();
+    } while (nodeid != NO_NODE);
 }

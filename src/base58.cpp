@@ -2,24 +2,52 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#include "base58.h"
+#include <base58.h>
 
-#include "hash.h"
+#include <hash.h>
+#include <uint256.h>
+#include <util/strencodings.h>
 #include "script/script.h"
-#include "uint256.h"
-#include "utilstrencodings.h"
 
 #include <boost/variant/apply_visitor.hpp>
 #include <boost/variant/static_visitor.hpp>
+#include <vector>
+#include <string>
+
+
+
 #include <cassert>
 #include <cstdint>
 #include <cstring>
-#include <string>
-#include <vector>
+
+// #include "base58.h"
+
+// #include "hash.h"
+// #include "uint256.h"
+
+// #include <cassert>
+// #include <cstdint>
+// #include <cstring>
 
 /** All alphanumeric characters except for "0", "I", "O", and "l" */
 static const char *pszBase58 =
     "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+static const int8_t mapBase58[256] = {
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 0,  1,  2,  3,  4,  5,  6,  7,
+    8,  -1, -1, -1, -1, -1, -1, -1, 9,  10, 11, 12, 13, 14, 15, 16, -1, 17, 18,
+    19, 20, 21, -1, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, -1, -1, -1, -1,
+    -1, -1, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, -1, 44, 45, 46, 47, 48,
+    49, 50, 51, 52, 53, 54, 55, 56, 57, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1,
+};
 
 bool DecodeBase58(const char *psz, std::vector<uint8_t> &vch) {
     // Skip leading spaces.
@@ -38,14 +66,16 @@ bool DecodeBase58(const char *psz, std::vector<uint8_t> &vch) {
     int size = strlen(psz) * 733 / 1000 + 1;
     std::vector<uint8_t> b256(size);
     // Process the characters.
+    // guarantee not out of range
+    static_assert(sizeof(mapBase58) / sizeof(mapBase58[0]) == 256,
+                  "mapBase58.size() should be 256");
     while (*psz && !IsSpace(*psz)) {
         // Decode base58 character
-        const char *ch = strchr(pszBase58, *psz);
-        if (ch == nullptr) {
+        int carry = mapBase58[(uint8_t)*psz];
+        // Invalid b58 character
+        if (carry == -1) {
             return false;
         }
-        // Apply "b256 = b256 * 58 + ch".
-        int carry = ch - pszBase58;
         int i = 0;
         for (std::vector<uint8_t>::reverse_iterator it = b256.rbegin();
              (carry != 0 || i < length) && (it != b256.rend()); ++it, ++i) {
@@ -66,8 +96,9 @@ bool DecodeBase58(const char *psz, std::vector<uint8_t> &vch) {
     }
     // Skip leading zeroes in b256.
     std::vector<uint8_t>::iterator it = b256.begin() + (size - length);
-    while (it != b256.end() && *it == 0)
+    while (it != b256.end() && *it == 0) {
         it++;
+    }
     // Copy result into output vector.
     vch.reserve(zeroes + (b256.end() - it));
     vch.assign(zeroes, 0x00);
@@ -121,7 +152,7 @@ std::string EncodeBase58(const uint8_t *pbegin, const uint8_t *pend) {
 }
 
 std::string EncodeBase58(const std::vector<uint8_t> &vch) {
-    return EncodeBase58(&vch[0], &vch[0] + vch.size());
+    return EncodeBase58(vch.data(), vch.data() + vch.size());
 }
 
 bool DecodeBase58(const std::string &str, std::vector<uint8_t> &vchRet) {
@@ -141,9 +172,9 @@ bool DecodeBase58Check(const char *psz, std::vector<uint8_t> &vchRet) {
         vchRet.clear();
         return false;
     }
-    // re-calculate the checksum, insure it matches the included 4-byte checksum
+    // re-calculate the checksum, ensure it matches the included 4-byte checksum
     uint256 hash = Hash(vchRet.begin(), vchRet.end() - 4);
-    if (memcmp(&hash, &vchRet.end()[-4], 4) != 0) {
+    if (memcmp(&hash, &vchRet[vchRet.size() - 4], 4) != 0) {
         vchRet.clear();
         return false;
     }

@@ -2,9 +2,9 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#include "crypto/sha512.h"
+#include <crypto/sha512.h>
 
-#include "crypto/common.h"
+#include <crypto/common.h>
 
 #include <cstring>
 
@@ -256,7 +256,7 @@ CSHA512 &CSHA512::Write(const uint8_t *data, size_t len) {
         sha512::Transform(s, buf);
         bufsize = 0;
     }
-    while (end >= data + 128) {
+    while (end - data >= 128) {
         // Process full chunks directly from the source.
         sha512::Transform(s, data);
         data += 128;

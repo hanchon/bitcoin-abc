@@ -1,12 +1,12 @@
-// Copyright (c) 2018 The Bitcoin developers
+// Copyright (c) 2018-2019 The Bitcoin developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#ifndef BITCOIN_BLOCK_INDEX_WORK_COMPARATOR_H
-#define BITCOIN_BLOCK_INDEX_WORK_COMPARATOR_H
+#ifndef BITCOIN_BLOCKINDEXWORKCOMPARATOR_H
+#define BITCOIN_BLOCKINDEXWORKCOMPARATOR_H
 
 // TODO: Split chain.h apart and only include CBlockIndex
-#include "chain.h"
+#include <chain.h>
 
 struct CBlockIndexWorkComparator {
     bool operator()(const CBlockIndex *pa, const CBlockIndex *pb) const {
@@ -40,4 +40,4 @@ struct CBlockIndexWorkComparator {
     }
 };
 
-#endif // BITCOIN_BLOCK_INDEX_WORK_COMPARATOR_H
+#endif // BITCOIN_BLOCKINDEXWORKCOMPARATOR_H

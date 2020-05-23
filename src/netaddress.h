@@ -6,11 +6,12 @@
 #define BITCOIN_NETADDRESS_H
 
 #if defined(HAVE_CONFIG_H)
-#include "config/bitcoin-config.h"
+#include <config/bitcoin-config.h>
 #endif
 
-#include "compat.h"
-#include "serialize.h"
+#include <compat.h>
+#include <serialize.h>
+#include <span.h>
 
 #include <cstdint>
 #include <string>
@@ -20,7 +21,7 @@ enum Network {
     NET_UNROUTABLE = 0,
     NET_IPV4,
     NET_IPV6,
-    NET_TOR,
+    NET_ONION,
     NET_INTERNAL,
 
     NET_MAX,
@@ -32,7 +33,7 @@ protected:
     // in network byte order
     uint8_t ip[16];
     // for scoped/link-local ipv6 addresses
-    uint32_t scopeId;
+    uint32_t scopeId{0};
 
 public:
     CNetAddr();
@@ -55,6 +56,8 @@ public:
 
     // for Tor addresses
     bool SetSpecial(const std::string &strName);
+    // INADDR_ANY equivalent
+    bool IsBindAny() const;
     // IPv4 mapped address (::FFFF:0:0/96, 0.0.0.0/0)
     bool IsIPv4() const;
     // IPv6 address (not mapped IPv4, not Tor)
@@ -78,8 +81,10 @@ public:
     bool IsRFC4193() const;
     // IPv6 Teredo tunnelling (2001::/32)
     bool IsRFC4380() const;
-    // IPv6 ORCHID (2001:10::/28)
+    // IPv6 ORCHID (deprecated) (2001:10::/28)
     bool IsRFC4843() const;
+    // IPv6 ORCHIDv2 (2001:20::/28)
+    bool IsRFC7343() const;
     // IPv6 autoconfig (FE80::/64)
     bool IsRFC4862() const;
     // IPv6 well-known prefix (64:FF9B::/96)
@@ -114,7 +119,7 @@ public:
 
     template <typename Stream, typename Operation>
     inline void SerializationOp(Stream &s, Operation ser_action) {
-        READWRITE(FLATDATA(ip));
+        READWRITE(ip);
     }
 
     friend class CSubNet;
@@ -153,8 +158,8 @@ public:
     template <typename Stream, typename Operation>
     inline void SerializationOp(Stream &s, Operation ser_action) {
         READWRITE(network);
-        READWRITE(FLATDATA(netmask));
-        READWRITE(FLATDATA(valid));
+        READWRITE(netmask);
+        READWRITE(valid);
     }
 };
 
@@ -162,7 +167,7 @@ public:
 class CService : public CNetAddr {
 protected:
     // host order
-    unsigned short port;
+    uint16_t port;
 
 public:
     CService();
@@ -189,12 +194,8 @@ public:
 
     template <typename Stream, typename Operation>
     inline void SerializationOp(Stream &s, Operation ser_action) {
-        READWRITE(FLATDATA(ip));
-        unsigned short portN = htons(port);
-        READWRITE(FLATDATA(portN));
-        if (ser_action.ForRead()) {
-            port = ntohs(portN);
-        }
+        READWRITE(ip);
+        READWRITE(WrapBigEndian(port));
     }
 };
 

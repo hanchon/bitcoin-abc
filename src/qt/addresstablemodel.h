@@ -8,10 +8,14 @@
 #include <QAbstractTableModel>
 #include <QStringList>
 
+enum class OutputType;
+
 class AddressTablePriv;
 class WalletModel;
 
-class CWallet;
+namespace interfaces {
+class Wallet;
+}
 
 /**
  * Qt model of the address book in the core. This allows views to access and
@@ -21,40 +25,40 @@ class AddressTableModel : public QAbstractTableModel {
     Q_OBJECT
 
 public:
-    explicit AddressTableModel(CWallet *wallet, WalletModel *parent = 0);
+    explicit AddressTableModel(WalletModel *parent = nullptr);
     ~AddressTableModel();
 
     enum ColumnIndex {
-        /**< User specified label */
+        /** User specified label */
         Label = 0,
-        /**< Bitcoin address */
+        /** Bitcoin address */
         Address = 1
     };
 
     enum RoleIndex {
-        /**< Type of address (#Send or #Receive) */
+        /** Type of address (#Send or #Receive) */
         TypeRole = Qt::UserRole
     };
 
     /** Return status of edit/insert operation */
     enum EditStatus {
-        /**< Everything ok */
+        /** Everything ok */
         OK,
-        /**< No changes were made during edit operation */
+        /** No changes were made during edit operation */
         NO_CHANGES,
-        /**< Unparseable address */
+        /** Unparseable address */
         INVALID_ADDRESS,
-        /**< Address already in address book */
+        /** Address already in address book */
         DUPLICATE_ADDRESS,
-        /**< Wallet could not be unlocked to create new receiving address */
+        /** Wallet could not be unlocked to create new receiving address */
         WALLET_UNLOCK_FAILURE,
-        /**< Generating a new public key for a receiving address failed */
+        /** Generating a new public key for a receiving address failed */
         KEY_GENERATION_FAILURE
     };
 
-    /**< Specifies send address */
+    /** Specifies send address */
     static const QString Send;
-    /**< Specifies receive address */
+    /** Specifies receive address */
     static const QString Receive;
 
     /** @name Methods overridden from QAbstractTableModel
@@ -77,12 +81,19 @@ public:
        Returns the added address on success, and an empty string otherwise.
      */
     QString addRow(const QString &type, const QString &label,
-                   const QString &address);
+                   const QString &address, const OutputType address_type);
 
-    /* Look up label for address in address book, if not found return empty
+    /**
+     * Look up label for address in address book, if not found return empty
      * string.
      */
     QString labelForAddress(const QString &address) const;
+
+    /**
+     * Look up purpose for address in address book, if not found return empty
+     * string.
+     */
+    QString purposeForAddress(const QString &address) const;
 
     /* Look up row index of an address in the model.
        Return -1 if not found.
@@ -91,12 +102,17 @@ public:
 
     EditStatus getEditStatus() const { return editStatus; }
 
+    OutputType GetDefaultAddressType() const;
+
 private:
-    WalletModel *walletModel;
-    CWallet *wallet;
-    AddressTablePriv *priv;
+    WalletModel *const walletModel;
+    AddressTablePriv *priv = nullptr;
     QStringList columns;
-    EditStatus editStatus;
+    EditStatus editStatus = OK;
+
+    /** Look up address book data given an address string. */
+    bool getAddressData(const QString &address, std::string *name,
+                        std::string *purpose) const;
 
     /** Notify listeners that data changed. */
     void emitDataChanged(int index);

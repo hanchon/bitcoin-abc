@@ -2,8 +2,9 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#include "amount.h"
-#include "test/test_bitcoin.h"
+#include <amount.h>
+
+#include <test/setup_common.h>
 
 #include <boost/test/unit_test.hpp>
 
@@ -12,7 +13,7 @@
 BOOST_FIXTURE_TEST_SUITE(feerate_tests, BasicTestingSetup)
 
 BOOST_AUTO_TEST_CASE(GetFeeTest) {
-    CFeeRate feeRate;
+    CFeeRate feeRate, altFeeRate;
 
     feeRate = CFeeRate(Amount::zero());
     // Must always return 0
@@ -64,7 +65,15 @@ BOOST_AUTO_TEST_CASE(GetFeeTest) {
     BOOST_CHECK_EQUAL(feeRate.GetFeeCeiling(200), 4 * SATOSHI);
     BOOST_CHECK_EQUAL(feeRate.GetFeeCeiling(1000), 18 * SATOSHI);
 
+    // Check alternate constructor
+    feeRate = CFeeRate(1000 * SATOSHI);
+    altFeeRate = CFeeRate(feeRate);
+    BOOST_CHECK_EQUAL(feeRate.GetFee(100), altFeeRate.GetFee(100));
+
     // Check full constructor
+    BOOST_CHECK(CFeeRate(-SATOSHI, 0) == CFeeRate(Amount::zero()));
+    BOOST_CHECK(CFeeRate(Amount::zero(), 0) == CFeeRate(Amount::zero()));
+    BOOST_CHECK(CFeeRate(SATOSHI, 0) == CFeeRate(Amount::zero()));
     // default value
     BOOST_CHECK(CFeeRate(-SATOSHI, 1000) == CFeeRate(-SATOSHI));
     BOOST_CHECK(CFeeRate(Amount::zero(), 1000) == CFeeRate(Amount::zero()));

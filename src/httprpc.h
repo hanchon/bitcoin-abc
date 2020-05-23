@@ -5,14 +5,13 @@
 #ifndef BITCOIN_HTTPRPC_H
 #define BITCOIN_HTTPRPC_H
 
-#include "httpserver.h"
-#include "rpc/server.h"
+#include <httpserver.h>
+#include <rpc/server.h>
 
 #include <map>
 #include <string>
 
 class Config;
-class HTTPRequest;
 
 class HTTPRPCRequestProcessor {
 private:
@@ -35,8 +34,7 @@ public:
  * Start HTTP RPC subsystem.
  * Precondition; HTTP and RPC has been started.
  */
-bool StartHTTPRPC(Config &config,
-                  HTTPRPCRequestProcessor &httpRPCRequestProcessor);
+bool StartHTTPRPC(HTTPRPCRequestProcessor &httpRPCRequestProcessor);
 
 /** Interrupt HTTP RPC subsystem */
 void InterruptHTTPRPC();
@@ -51,7 +49,7 @@ void StopHTTPRPC();
  * Start HTTP REST subsystem.
  * Precondition; HTTP and RPC has been started.
  */
-bool StartREST();
+void StartREST();
 
 /** Interrupt RPC REST subsystem */
 void InterruptREST();
@@ -62,4 +60,4 @@ void InterruptREST();
  */
 void StopREST();
 
-#endif
+#endif // BITCOIN_HTTPRPC_H

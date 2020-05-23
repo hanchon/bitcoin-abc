@@ -1,4 +1,4 @@
-Mac OS X Build Instructions and Notes
+macOS Build Instructions and Notes
 ====================================
 The commands in this guide should be executed in a Terminal application.
 The built-in one is located in `/Applications/Utilities/Terminal.app`.
@@ -8,69 +8,79 @@ Preparation
 
 1.  Install Xcode from the app store if you don't have it already (it's a dependency for qt5)
 
-    NOTE: Building with Qt4 is still supported, however, could result in a broken UI. Building with Qt5 is recommended.
-
-2.  Install the OS X command line tools:
+2.  Install the macOS command line tools:
 
 `xcode-select --install`
 
 When the popup appears, click `Install`.
 
-3.  Install [Homebrew](http://brew.sh).
+3.  Install [Homebrew](https://brew.sh).
 
 Dependencies
 ----------------------
 
 Install dependencies:
 
-    brew install automake berkeley-db libtool boost --c++11 miniupnpc openssl pkg-config protobuf --c++11 qt5 libevent
+    brew install berkeley-db boost cmake libevent miniupnpc ninja openssl protobuf python qrencode qt zeromq
 
-In case you want to build the disk image with `make deploy` (.dmg / optional), you need RSVG
+See [dependencies.md](dependencies.md) for a complete overview.
+
+If you want to build the disk image with `ninja osx-dmg` (.dmg / optional), you need RSVG:
 
     brew install librsvg
 
 Build Bitcoin ABC
 -----------------
 
+Before you start building, please make sure that your compiler supports C++14.
+
 1. Clone the Bitcoin ABC source code and cd into `bitcoin-abc`
 
         git clone https://github.com/Bitcoin-ABC/bitcoin-abc.git
         cd bitcoin-abc
 
-2.  Build bitcoin-abc:
+2.  Build Bitcoin ABC:
 
-    Configure and build the headless bitcoin binaries as well as the GUI (if Qt is found).
+    Configure and build the headless Bitcoin ABC binaries as well as the GUI.
 
-    You can disable the GUI build by passing `--without-gui` to configure.
+    You can disable the GUI build by passing `-DBUILD_BITCOIN_QT=OFF` to cmake.
 
-    It is recommended to create a build directory to build out-of-tree. 
+    It is recommended to create a build directory to build out-of-tree.
 
-        ./autogen.sh
         mkdir build
         cd build
-        ../configure
-        make
+        cmake -GNinja ..
+        ninja
 
 3.  It is recommended to build and run the unit tests:
 
-        make check
+        ninja check
 
 4.  You can also create a .dmg that contains the .app bundle (optional):
 
-        make deploy
+        ninja osx-dmg
+
+Disable-wallet mode
+--------------------
+When the intention is to run only a P2P node without a wallet, Bitcoin ABC may be compiled in
+disable-wallet mode with:
+
+    cmake -GNinja .. -DBUILD_BITCOIN_WALLET=OFF
+
+Mining is also possible in disable-wallet mode using the `getblocktemplate` RPC call.
 
 Running
 -------
 
 Bitcoin ABC is now available at `./src/bitcoind`
 
-Before running, it's recommended you create an RPC configuration file.
+Before running, it's recommended that you create an RPC configuration file:
 
     echo -e "rpcuser=bitcoinrpc\nrpcpassword=$(xxd -l 16 -p /dev/urandom)" > "/Users/${USER}/Library/Application Support/Bitcoin/bitcoin.conf"
 
     chmod 600 "/Users/${USER}/Library/Application Support/Bitcoin/bitcoin.conf"
 
-The first time you run bitcoind, it will start downloading the blockchain. This process could take several hours.
+The first time you run bitcoind, it will start downloading the blockchain. This process could take many hours, or even days on slower than average systems.
 
 You can monitor the download process by looking at the debug.log file:
 
@@ -83,26 +93,7 @@ Other commands:
     ./src/bitcoin-cli --help # Outputs a list of command-line options.
     ./src/bitcoin-cli help # Outputs a list of RPC commands when the daemon is running.
 
-Using Qt Creator as IDE
-------------------------
-You can use Qt Creator as an IDE, for bitcoin development.
-Download and install the community edition of [Qt Creator](https://www.qt.io/download/).
-Uncheck everything except Qt Creator during the installation process.
-
-1. Make sure you installed everything through Homebrew mentioned above
-2. Do a proper ./configure --enable-debug
-3. In Qt Creator do "New Project" -> Import Project -> Import Existing Project
-4. Enter "bitcoin-qt" as project name, enter src/qt as location
-5. Leave the file selection as it is
-6. Confirm the "summary page"
-7. In the "Projects" tab select "Manage Kits..."
-8. Select the default "Desktop" kit and select "Clang (x86 64bit in /usr/bin)" as compiler
-9. Select LLDB as debugger (you might need to set the path to your installation)
-10. Start debugging with Qt Creator
-
 Notes
 -----
-
-* Tested on OS X 10.8 through 10.12 on 64-bit Intel processors only.
 
 * Building with downloaded Qt binaries is not officially supported. See the notes in [#7714](https://github.com/bitcoin/bitcoin/issues/7714)

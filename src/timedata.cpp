@@ -3,19 +3,20 @@
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 #if defined(HAVE_CONFIG_H)
-#include "config/bitcoin-config.h"
+#include <config/bitcoin-config.h>
 #endif
 
-#include "timedata.h"
+#include <timedata.h>
 
-#include "netaddress.h"
-#include "sync.h"
-#include "ui_interface.h"
-#include "util.h"
-#include "utilstrencodings.h"
-#include "warnings.h"
+#include <netaddress.h>
+#include <sync.h>
+#include <ui_interface.h>
+#include <util/strencodings.h>
+#include <util/system.h>
+#include <util/translation.h>
+#include <warnings.h>
 
-static CCriticalSection cs_nTimeOffset;
+static RecursiveMutex cs_nTimeOffset;
 static int64_t nTimeOffset = 0;
 
 /**
@@ -35,8 +36,9 @@ int64_t GetAdjustedTime() {
     return GetTime() + GetTimeOffset();
 }
 
-static int64_t abs64(int64_t n) {
-    return (n >= 0 ? n : -n);
+static uint64_t abs64(int64_t n) {
+    const uint64_t un = n;
+    return (n >= 0) ? un : -un;
 }
 
 #define BITCOIN_TIMEDATA_MAX_SAMPLES 200
@@ -45,8 +47,12 @@ void AddTimeData(const CNetAddr &ip, int64_t nOffsetSample) {
     LOCK(cs_nTimeOffset);
     // Ignore duplicates
     static std::set<CNetAddr> setKnown;
-    if (setKnown.size() == BITCOIN_TIMEDATA_MAX_SAMPLES) return;
-    if (!setKnown.insert(ip).second) return;
+    if (setKnown.size() == BITCOIN_TIMEDATA_MAX_SAMPLES) {
+        return;
+    }
+    if (!setKnown.insert(ip).second) {
+        return;
+    }
 
     // Add data
     static CMedianFilter<int64_t> vTimeOffsets(BITCOIN_TIMEDATA_MAX_SAMPLES, 0);
@@ -77,8 +83,9 @@ void AddTimeData(const CNetAddr &ip, int64_t nOffsetSample) {
         std::vector<int64_t> vSorted = vTimeOffsets.sorted();
         // Only let other nodes change our time by so much
         if (abs64(nMedian) <=
-            std::max<int64_t>(0, gArgs.GetArg("-maxtimeadjustment",
-                                              DEFAULT_MAX_TIME_ADJUSTMENT))) {
+            uint64_t(std::max<int64_t>(
+                0, gArgs.GetArg("-maxtimeadjustment",
+                                DEFAULT_MAX_TIME_ADJUSTMENT)))) {
             nTimeOffset = nMedian;
         } else {
             nTimeOffset = 0;
@@ -88,8 +95,10 @@ void AddTimeData(const CNetAddr &ip, int64_t nOffsetSample) {
                 // If nobody has a time different than ours but within 5 minutes
                 // of ours, give a warning
                 bool fMatch = false;
-                for (int64_t nOffset : vSorted) {
-                    if (nOffset != 0 && abs64(nOffset) < 5 * 60) fMatch = true;
+                for (const int64_t nOffset : vSorted) {
+                    if (nOffset != 0 && abs64(nOffset) < 5 * 60) {
+                        fMatch = true;
+                    }
                 }
 
                 if (!fMatch) {
@@ -97,8 +106,9 @@ void AddTimeData(const CNetAddr &ip, int64_t nOffsetSample) {
                     std::string strMessage =
                         strprintf(_("Please check that your computer's date "
                                     "and time are correct! If your clock is "
-                                    "wrong, %s will not work properly."),
-                                  _(PACKAGE_NAME));
+                                    "wrong, %s will not work properly.")
+                                      .translated,
+                                  PACKAGE_NAME);
                     SetMiscWarning(strMessage);
                     uiInterface.ThreadSafeMessageBox(
                         strMessage, "", CClientUIInterface::MSG_WARNING);
@@ -107,11 +117,11 @@ void AddTimeData(const CNetAddr &ip, int64_t nOffsetSample) {
         }
 
         if (LogAcceptCategory(BCLog::NET)) {
-            for (int64_t n : vSorted) {
-                LogPrint(BCLog::NET, "%+d  ", n);
+            for (const int64_t n : vSorted) {
+                LogPrintToBeContinued(BCLog::NET, "%+d  ", n);
             }
 
-            LogPrint(BCLog::NET, "|  ");
+            LogPrintToBeContinued(BCLog::NET, "|  ");
             LogPrint(BCLog::NET, "nTimeOffset = %+d  (%+d minutes)\n",
                      nTimeOffset, nTimeOffset / 60);
         }

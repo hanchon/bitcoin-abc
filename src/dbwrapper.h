@@ -5,13 +5,13 @@
 #ifndef BITCOIN_DBWRAPPER_H
 #define BITCOIN_DBWRAPPER_H
 
-#include "clientversion.h"
-#include "fs.h"
-#include "serialize.h"
-#include "streams.h"
-#include "util.h"
-#include "utilstrencodings.h"
-#include "version.h"
+#include <clientversion.h>
+#include <fs.h>
+#include <serialize.h>
+#include <streams.h>
+#include <util/strencodings.h>
+#include <util/system.h>
+#include <version.h>
 
 #include <leveldb/db.h>
 #include <leveldb/write_batch.h>
@@ -196,6 +196,9 @@ private:
     //! the database itself
     leveldb::DB *pdb;
 
+    //! the name of this database
+    std::string m_name;
+
     //! a key used for optional XOR-obfuscation of the database
     std::vector<uint8_t> obfuscate_key;
 
@@ -223,6 +226,9 @@ public:
                bool obfuscate = false, bool compression = false,
                int maxOpenFiles = 64);
     ~CDBWrapper();
+
+    CDBWrapper(const CDBWrapper &) = delete;
+    CDBWrapper &operator=(const CDBWrapper &) = delete;
 
     template <typename K, typename V> bool Read(const K &key, V &value) const {
         CDataStream ssKey(SER_DISK, CLIENT_VERSION);
@@ -279,6 +285,9 @@ public:
     }
 
     bool WriteBatch(CDBBatch &batch, bool fSync = false);
+
+    // Get an estimate of LevelDB memory usage (in bytes).
+    size_t DynamicMemoryUsage() const;
 
     // not available for LevelDB; provide for compatibility with BDB
     bool Flush() { return true; }

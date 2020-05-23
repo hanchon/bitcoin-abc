@@ -6,8 +6,8 @@
 #ifndef BITCOIN_STREAMS_H
 #define BITCOIN_STREAMS_H
 
-#include "serialize.h"
-#include "support/allocators/zeroafterfree.h"
+#include <serialize.h>
+#include <support/allocators/zeroafterfree.h>
 
 #include <algorithm>
 #include <cassert>
@@ -38,7 +38,7 @@ public:
         return (*this);
     }
 
-    template <typename T> OverrideStream<Stream> &operator>>(T &obj) {
+    template <typename T> OverrideStream<Stream> &operator>>(T &&obj) {
         // Unserialize from this stream
         ::Unserialize(*this, obj);
         return (*this);
@@ -68,18 +68,20 @@ public:
      * @param[in]  nVersionIn Serialization Version (including any flags)
      * @param[in]  vchDataIn  Referenced byte vector to overwrite/append
      * @param[in]  nPosIn Starting position. Vector index where writes should
-     * start. The vector will initially grow as necessary to  max(index,
+     * start. The vector will initially grow as necessary to  max(nPosIn,
      * vec.size()). So to append, use vec.size().
      */
     CVectorWriter(int nTypeIn, int nVersionIn, std::vector<uint8_t> &vchDataIn,
                   size_t nPosIn)
         : nType(nTypeIn), nVersion(nVersionIn), vchData(vchDataIn),
           nPos(nPosIn) {
-        if (nPos > vchData.size()) vchData.resize(nPos);
+        if (nPos > vchData.size()) {
+            vchData.resize(nPos);
+        }
     }
     /**
      * (other params same as above)
-     * @param[in]  args  A list of items to serialize starting at nPos.
+     * @param[in]  args  A list of items to serialize starting at nPosIn.
      */
     template <typename... Args>
     CVectorWriter(int nTypeIn, int nVersionIn, std::vector<uint8_t> &vchDataIn,
@@ -110,7 +112,9 @@ public:
     int GetType() const { return nType; }
     void seek(size_t nSize) {
         nPos += nSize;
-        if (nPos > vchData.size()) vchData.resize(nPos);
+        if (nPos > vchData.size()) {
+            vchData.resize(nPos);
+        }
     }
 
 private:
@@ -118,6 +122,70 @@ private:
     const int nVersion;
     std::vector<uint8_t> &vchData;
     size_t nPos;
+};
+
+/**
+ * Minimal stream for reading from an existing vector by reference
+ */
+class VectorReader {
+private:
+    const int m_type;
+    const int m_version;
+    const std::vector<uint8_t> &m_data;
+    size_t m_pos = 0;
+
+public:
+    /**
+     * @param[in]  type Serialization Type
+     * @param[in]  version Serialization Version (including any flags)
+     * @param[in]  data Referenced byte vector to overwrite/append
+     * @param[in]  pos Starting position. Vector index where reads should start.
+     */
+    VectorReader(int type, int version, const std::vector<uint8_t> &data,
+                 size_t pos)
+        : m_type(type), m_version(version), m_data(data), m_pos(pos) {
+        if (m_pos > m_data.size()) {
+            throw std::ios_base::failure(
+                "VectorReader(...): end of data (m_pos > m_data.size())");
+        }
+    }
+
+    /**
+     * (other params same as above)
+     * @param[in]  args  A list of items to deserialize starting at pos.
+     */
+    template <typename... Args>
+    VectorReader(int type, int version, const std::vector<uint8_t> &data,
+                 size_t pos, Args &&... args)
+        : VectorReader(type, version, data, pos) {
+        ::UnserializeMany(*this, std::forward<Args>(args)...);
+    }
+
+    template <typename T> VectorReader &operator>>(T &obj) {
+        // Unserialize from this stream
+        ::Unserialize(*this, obj);
+        return (*this);
+    }
+
+    int GetVersion() const { return m_version; }
+    int GetType() const { return m_type; }
+
+    size_t size() const { return m_data.size() - m_pos; }
+    bool empty() const { return m_data.size() == m_pos; }
+
+    void read(char *dst, size_t n) {
+        if (n == 0) {
+            return;
+        }
+
+        // Read from the beginning of the buffer
+        size_t pos_next = m_pos + n;
+        if (pos_next > m_data.size()) {
+            throw std::ios_base::failure("VectorReader::read(): end of data");
+        }
+        memcpy(dst, m_data.data() + m_pos, n);
+        m_pos = pos_next;
+    }
 };
 
 /**
@@ -300,7 +368,9 @@ public:
 
     bool Rewind(size_type n) {
         // Rewind by n characters if the buffer hasn't been compacted yet
-        if (n > nReadPos) return false;
+        if (n > nReadPos) {
+            return false;
+        }
         nReadPos -= n;
         return true;
     }
@@ -344,9 +414,10 @@ public:
         }
         unsigned int nReadPosNext = nReadPos + nSize;
         if (nReadPosNext >= vch.size()) {
-            if (nReadPosNext > vch.size())
+            if (nReadPosNext > vch.size()) {
                 throw std::ios_base::failure(
                     "CDataStream::ignore(): end of data");
+            }
             nReadPos = 0;
             vch.clear();
             return;
@@ -361,7 +432,9 @@ public:
 
     template <typename Stream> void Serialize(Stream &s) const {
         // Special case: stream << stream concatenates like stream += stream
-        if (!vch.empty()) s.write((char *)&vch[0], vch.size() * sizeof(vch[0]));
+        if (!vch.empty()) {
+            s.write((char *)vch.data(), vch.size() * sizeof(value_type));
+        }
     }
 
     template <typename T> CDataStream &operator<<(const T &obj) {
@@ -370,7 +443,7 @@ public:
         return (*this);
     }
 
-    template <typename T> CDataStream &operator>>(T &obj) {
+    template <typename T> CDataStream &operator>>(T &&obj) {
         // Unserialize from this stream
         ::Unserialize(*this, obj);
         return (*this);
@@ -403,6 +476,102 @@ public:
     }
 };
 
+template <typename IStream> class BitStreamReader {
+private:
+    IStream &m_istream;
+
+    /// Buffered byte read in from the input stream. A new byte is read into the
+    /// buffer when m_offset reaches 8.
+    uint8_t m_buffer{0};
+
+    /// Number of high order bits in m_buffer already returned by previous
+    /// Read() calls. The next bit to be returned is at this offset from the
+    /// most significant bit position.
+    int m_offset{8};
+
+public:
+    explicit BitStreamReader(IStream &istream) : m_istream(istream) {}
+
+    /**
+     * Read the specified number of bits from the stream. The data is returned
+     * in the nbits least significant bits of a 64-bit uint.
+     */
+    uint64_t Read(int nbits) {
+        if (nbits < 0 || nbits > 64) {
+            throw std::out_of_range("nbits must be between 0 and 64");
+        }
+
+        uint64_t data = 0;
+        while (nbits > 0) {
+            if (m_offset == 8) {
+                m_istream >> m_buffer;
+                m_offset = 0;
+            }
+
+            int bits = std::min(8 - m_offset, nbits);
+            data <<= bits;
+            data |= static_cast<uint8_t>(m_buffer << m_offset) >> (8 - bits);
+            m_offset += bits;
+            nbits -= bits;
+        }
+        return data;
+    }
+};
+
+template <typename OStream> class BitStreamWriter {
+private:
+    OStream &m_ostream;
+
+    /// Buffered byte waiting to be written to the output stream. The byte is
+    /// written buffer when m_offset reaches 8 or Flush() is called.
+    uint8_t m_buffer{0};
+
+    /// Number of high order bits in m_buffer already written by previous
+    /// Write() calls and not yet flushed to the stream. The next bit to be
+    /// written to is at this offset from the most significant bit position.
+    int m_offset{0};
+
+public:
+    explicit BitStreamWriter(OStream &ostream) : m_ostream(ostream) {}
+
+    ~BitStreamWriter() { Flush(); }
+
+    /**
+     * Write the nbits least significant bits of a 64-bit int to the output
+     * stream. Data is buffered until it completes an octet.
+     */
+    void Write(uint64_t data, int nbits) {
+        if (nbits < 0 || nbits > 64) {
+            throw std::out_of_range("nbits must be between 0 and 64");
+        }
+
+        while (nbits > 0) {
+            int bits = std::min(8 - m_offset, nbits);
+            m_buffer |= (data << (64 - nbits)) >> (64 - 8 + m_offset);
+            m_offset += bits;
+            nbits -= bits;
+
+            if (m_offset == 8) {
+                Flush();
+            }
+        }
+    }
+
+    /**
+     * Flush any unwritten bits to the output stream, padding with 0's to the
+     * next byte boundary.
+     */
+    void Flush() {
+        if (m_offset == 0) {
+            return;
+        }
+
+        m_ostream << m_buffer;
+        m_buffer = 0;
+        m_offset = 0;
+    }
+};
+
 /**
  * Non-refcounted RAII wrapper for FILE*
  *
@@ -412,10 +581,6 @@ public:
  */
 class CAutoFile {
 private:
-    // Disallow copies
-    CAutoFile(const CAutoFile &);
-    CAutoFile &operator=(const CAutoFile &);
-
     const int nType;
     const int nVersion;
 
@@ -428,6 +593,10 @@ public:
     }
 
     ~CAutoFile() { fclose(); }
+
+    // Disallow copies
+    CAutoFile(const CAutoFile &) = delete;
+    CAutoFile &operator=(const CAutoFile &) = delete;
 
     void fclose() {
         if (file) {
@@ -465,52 +634,60 @@ public:
     int GetVersion() const { return nVersion; }
 
     void read(char *pch, size_t nSize) {
-        if (!file)
+        if (!file) {
             throw std::ios_base::failure(
                 "CAutoFile::read: file handle is nullptr");
-        if (fread(pch, 1, nSize, file) != nSize)
+        }
+        if (fread(pch, 1, nSize, file) != nSize) {
             throw std::ios_base::failure(feof(file)
                                              ? "CAutoFile::read: end of file"
                                              : "CAutoFile::read: fread failed");
+        }
     }
 
     void ignore(size_t nSize) {
-        if (!file)
+        if (!file) {
             throw std::ios_base::failure(
                 "CAutoFile::ignore: file handle is nullptr");
+        }
         uint8_t data[4096];
         while (nSize > 0) {
             size_t nNow = std::min<size_t>(nSize, sizeof(data));
-            if (fread(data, 1, nNow, file) != nNow)
+            if (fread(data, 1, nNow, file) != nNow) {
                 throw std::ios_base::failure(
                     feof(file) ? "CAutoFile::ignore: end of file"
                                : "CAutoFile::read: fread failed");
+            }
             nSize -= nNow;
         }
     }
 
     void write(const char *pch, size_t nSize) {
-        if (!file)
+        if (!file) {
             throw std::ios_base::failure(
                 "CAutoFile::write: file handle is nullptr");
-        if (fwrite(pch, 1, nSize, file) != nSize)
+        }
+        if (fwrite(pch, 1, nSize, file) != nSize) {
             throw std::ios_base::failure("CAutoFile::write: write failed");
+        }
     }
 
     template <typename T> CAutoFile &operator<<(const T &obj) {
         // Serialize to this stream
-        if (!file)
+        if (!file) {
             throw std::ios_base::failure(
                 "CAutoFile::operator<<: file handle is nullptr");
+        }
         ::Serialize(*this, obj);
         return (*this);
     }
 
-    template <typename T> CAutoFile &operator>>(T &obj) {
+    template <typename T> CAutoFile &operator>>(T &&obj) {
         // Unserialize from this stream
-        if (!file)
+        if (!file) {
             throw std::ios_base::failure(
                 "CAutoFile::operator>>: file handle is nullptr");
+        }
         ::Unserialize(*this, obj);
         return (*this);
     }
@@ -526,10 +703,6 @@ public:
  */
 class CBufferedFile {
 private:
-    // Disallow copies
-    CBufferedFile(const CBufferedFile &);
-    CBufferedFile &operator=(const CBufferedFile &);
-
     const int nType;
     const int nVersion;
 
@@ -552,8 +725,12 @@ protected:
         unsigned int pos = nSrcPos % vchBuf.size();
         unsigned int readNow = vchBuf.size() - pos;
         unsigned int nAvail = vchBuf.size() - (nSrcPos - nReadPos) - nRewind;
-        if (nAvail < readNow) readNow = nAvail;
-        if (readNow == 0) return false;
+        if (nAvail < readNow) {
+            readNow = nAvail;
+        }
+        if (readNow == 0) {
+            return false;
+        }
         size_t nBytes = fread((void *)&vchBuf[pos], 1, readNow, src);
         if (nBytes == 0) {
             throw std::ios_base::failure(
@@ -569,11 +746,16 @@ public:
     CBufferedFile(FILE *fileIn, uint64_t nBufSize, uint64_t nRewindIn,
                   int nTypeIn, int nVersionIn)
         : nType(nTypeIn), nVersion(nVersionIn), nSrcPos(0), nReadPos(0),
-          nReadLimit((uint64_t)(-1)), nRewind(nRewindIn), vchBuf(nBufSize, 0) {
+          nReadLimit(std::numeric_limits<uint64_t>::max()), nRewind(nRewindIn),
+          vchBuf(nBufSize, 0) {
         src = fileIn;
     }
 
     ~CBufferedFile() { fclose(); }
+
+    // Disallow copies
+    CBufferedFile(const CBufferedFile &) = delete;
+    CBufferedFile &operator=(const CBufferedFile &) = delete;
 
     int GetVersion() const { return nVersion; }
     int GetType() const { return nType; }
@@ -590,16 +772,24 @@ public:
 
     // read a number of bytes
     void read(char *pch, size_t nSize) {
-        if (nSize + nReadPos > nReadLimit)
+        if (nSize + nReadPos > nReadLimit) {
             throw std::ios_base::failure("Read attempted past buffer limit");
-        if (nSize + nRewind > vchBuf.size())
+        }
+        if (nSize + nRewind > vchBuf.size()) {
             throw std::ios_base::failure("Read larger than buffer size");
+        }
         while (nSize > 0) {
-            if (nReadPos == nSrcPos) Fill();
+            if (nReadPos == nSrcPos) {
+                Fill();
+            }
             unsigned int pos = nReadPos % vchBuf.size();
             size_t nNow = nSize;
-            if (nNow + pos > vchBuf.size()) nNow = vchBuf.size() - pos;
-            if (nNow + nReadPos > nSrcPos) nNow = nSrcPos - nReadPos;
+            if (nNow + pos > vchBuf.size()) {
+                nNow = vchBuf.size() - pos;
+            }
+            if (nNow + nReadPos > nSrcPos) {
+                nNow = nSrcPos - nReadPos;
+            }
             memcpy(pch, &vchBuf[pos], nNow);
             nReadPos += nNow;
             pch += nNow;
@@ -626,8 +816,12 @@ public:
 
     bool Seek(uint64_t nPos) {
         long nLongPos = nPos;
-        if (nPos != (uint64_t)nLongPos) return false;
-        if (fseek(src, nLongPos, SEEK_SET)) return false;
+        if (nPos != (uint64_t)nLongPos) {
+            return false;
+        }
+        if (fseek(src, nLongPos, SEEK_SET)) {
+            return false;
+        }
         nLongPos = ftell(src);
         nSrcPos = nLongPos;
         nReadPos = nLongPos;
@@ -635,13 +829,15 @@ public:
     }
 
     // Prevent reading beyond a certain position. No argument removes the limit.
-    bool SetLimit(uint64_t nPos = (uint64_t)(-1)) {
-        if (nPos < nReadPos) return false;
+    bool SetLimit(uint64_t nPos = std::numeric_limits<uint64_t>::max()) {
+        if (nPos < nReadPos) {
+            return false;
+        }
         nReadLimit = nPos;
         return true;
     }
 
-    template <typename T> CBufferedFile &operator>>(T &obj) {
+    template <typename T> CBufferedFile &operator>>(T &&obj) {
         // Unserialize from this stream
         ::Unserialize(*this, obj);
         return (*this);
@@ -650,8 +846,12 @@ public:
     // search for a given byte in the stream, and remain positioned on it
     void FindByte(char ch) {
         while (true) {
-            if (nReadPos == nSrcPos) Fill();
-            if (vchBuf[nReadPos % vchBuf.size()] == ch) break;
+            if (nReadPos == nSrcPos) {
+                Fill();
+            }
+            if (vchBuf[nReadPos % vchBuf.size()] == ch) {
+                break;
+            }
             nReadPos++;
         }
     }
